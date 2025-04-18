@@ -1,4 +1,4 @@
-handtracker/checkpoint/
+handtracker/checkpoint/*
 output/
 calibration/
 objecttracker/Yolov8_extraobjshape.v2i.yolov8/

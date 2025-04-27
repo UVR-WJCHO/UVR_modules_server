@@ -1,4 +1,4 @@
-import sys
+import os, sys
 import asyncio
 import time
 from collections import deque
@@ -59,7 +59,7 @@ def init_hl2():
 
     # Get RM Depth AHAT calibration -------------------------------------------
     # Calibration data will be downloaded if it's not in the calibration folder
-    calibration_ht = hl2ss_3dcv.get_calibration_rm(host, hl2ss.StreamPort.RM_DEPTH_AHAT, calibration_path)
+    calibration_ht = hl2ss_3dcv.get_calibration_rm(calibration_path, host, hl2ss.StreamPort.RM_DEPTH_AHAT)
 
     uv2xy = calibration_ht.uv2xy  # hl2ss_3dcv.compute_uv2xy(calibration_ht.intrinsics, hl2ss.Parameters_RM_DEPTH_AHAT.WIDTH, hl2ss.Parameters_RM_DEPTH_AHAT.HEIGHT)
     xy1, scale = hl2ss_3dcv.rm_depth_compute_rays(uv2xy, calibration_ht.scale)
@@ -88,7 +88,7 @@ def init_hl2():
     sink_ht.get_attach_response()
 
     # Initialize PV intrinsics and extrinsics ---------------------------------
-    pv_intrinsics = hl2ss.create_pv_intrinsics_placeholder()
+    pv_intrinsics = hl2ss_3dcv.pv_create_intrinsics_placeholder()
     pv_extrinsics = np.eye(4, 4, dtype=np.float32)
 
     return [sink_ht, sink_pv, pv_intrinsics, pv_extrinsics, xy1_o, xy1_d, scale, calibration_ht], max_depth, producer
@@ -96,6 +96,7 @@ def init_hl2():
 
 def receive_images(init_variables, flag_depth):
 
+    global depth
     sink_ht, sink_pv, pv_intrinsics, pv_extrinsics, xy1_o, xy1_d, scale, calibration_ht = init_variables
 
     # Get RM Depth AHAT frame and nearest (in time) PV frame --------------
@@ -115,8 +116,7 @@ def receive_images(init_variables, flag_depth):
 
     # Update PV intrinsics ------------------------------------------------
     # PV intrinsics may change between frames due to autofocus
-    pv_intrinsics = hl2ss.update_pv_intrinsics(pv_intrinsics, data_pv.payload.focal_length,
-                                               data_pv.payload.principal_point)
+    pv_intrinsics = hl2ss_3dcv.pv_update_intrinsics(pv_intrinsics, data_pv.payload.focal_length, data_pv.payload.principal_point)
     color_intrinsics, color_extrinsics = hl2ss_3dcv.pv_fix_calibration(pv_intrinsics, pv_extrinsics)
 
     # Generate depth map for PV image -------------------------------------

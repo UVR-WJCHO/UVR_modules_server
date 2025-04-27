@@ -1,5 +1,5 @@
 handtracker/checkpoint/*
-calibration/rm_depth_ahat/
+calibration/rm_depth_ahat/*
 output/
 objecttracker/Yolov8_extraobjshape.v2i.yolov8/
 __pycache__

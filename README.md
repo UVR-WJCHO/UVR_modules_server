@@ -9,10 +9,10 @@
 - Download pretrained model and Mano data (updated : 23/10/16)
 
 ```
-https://www.dropbox.com/scl/fi/fs5rix3z5r7qi1bypfy2o/SAR_r5_AGCN4_cross_2layer_extraTrue_resnet34_Epochs50.zip?rlkey=cvw0rxlb0vavpipfq0j0ulpii&dl=0
+https://www.dropbox.com/scl/fi/mgtnhommqvrvm2exjbxjx/SAR_AGCN4_cross_wBGaug_extraTrue_resnet34_s0_Epochs50.zip?rlkey=pgxx00s6efc3jswutzessyafl&st=297m7cxy&dl=0
 ```
 ```
-https://www.dropbox.com/scl/fi/60hzlehmd74e2c3xo2pxz/mano.zip?rlkey=mrxkbn9yl06zmop6ml6n1ofsy&dl=0
+https://www.dropbox.com/scl/fi/60hzlehmd74e2c3xo2pxz/mano.zip?rlkey=mrxkbn9yl06zmop6ml6n1ofsy&st=7r8izg3h&dl=0
 ```
 
 - Locate the file at 

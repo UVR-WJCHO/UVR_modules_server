@@ -1,6 +1,6 @@
 import copy
 import os
-os.environ["PYOPENGL_PLATFORM"] = "OSMesa"
+# os.environ["PYOPENGL_PLATFORM"] = "OSMesa"
 import sys
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))     # append current dir to PATH
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), "../"))
@@ -22,6 +22,30 @@ import mediapipe as mp
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
 mp_hands = mp.solutions.hands
+
+
+prev = time.time()
+prev_label = "init"
+
+log_t_dict = {"start": [], "detection": [], "preprocess":[], "inference":[],"postprocess":[]}
+
+
+def log_event(label, flag_time=False):
+    global prev_label, prev, log_t_dict
+
+    now = time.time()
+    latency = now - prev
+    if flag_time:
+        print(f"{prev_label} ~ {label}: {latency:.4f}")
+    prev_label = label
+    prev = now
+
+    # if label in log_t_dict:
+    #     log_t_dict[label].append(latency)
+    #
+    #     if len(log_t_dict[label]) > 100:
+    #         print(f"avg latency for {label}: {np.average(np.array(log_t_dict[label]))}")
+
 
 
 def rgb2gray(rgb):
@@ -109,7 +133,7 @@ class HandTracker():
 
 
     def Process_single_newroi(self, img): # input : img_cv
-        t0 = time.time()
+        log_event("start")
         if img.shape[-1] == 4:
             img = img[:, :, :-1]
         image_height, image_width = img.shape[0], img.shape[1]  # (360, 640)
@@ -140,6 +164,7 @@ class HandTracker():
             if bbox[0:2] == self.bbox_togo[0:2]:
                 self.bbox_togo = None
 
+        log_event("detection")
 
         img_crop, img2bb_trans, bb2img_trans, _, _, = augmentation_real(img, bbox, flip=False)
         # cv2.imshow('img_crop', img_crop/255.0)
@@ -168,10 +193,10 @@ class HandTracker():
             inputs['extra'] = torch.unsqueeze(torch.from_numpy(extra_hm), dim=0)
             self.idx += 1
 
-        t1 = time.time()
+        log_event("preprocess")
         with torch.no_grad():
             outs = self.tester.model(inputs).detach()
-        t2 = time.time()
+        log_event("inference")
 
         outs = outs.to("cpu", non_blocking=True)
         coords_uvd = outs.numpy()[0]
@@ -202,6 +227,8 @@ class HandTracker():
         # cv2.waitKey(1)
 
         self.prev_coord = np.copy(coords_uvd)
+
+        log_event("postprocess")
 
         return coords_uvd
 

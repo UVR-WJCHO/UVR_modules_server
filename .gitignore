@@ -1,5 +1,10 @@
-handtracker/checkpoint/*
-calibration/rm_depth_ahat/*
-output/
-objecttracker/Yolov8_extraobjshape.v2i.yolov8/
+
 __pycache__
+
+calibration/rm_depth_ahat/*
+outputs/*
+pretrain/*
+
+handtracker/checkpoint/*
+handtracker_wilor/pretrained_models/*
+

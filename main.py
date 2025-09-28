@@ -177,7 +177,7 @@ def main_single():
     else:
         track_hand = HandTracker_our()
 
-    track_obj = ObjTracker()
+    # track_obj = ObjTracker()
     track_gesture = GestureClassfier(img_width=640, img_height=360)
 
     ###################### init comm. with hololens2 ######################
@@ -207,10 +207,11 @@ def main_single():
             flag_depth = False
         flag_depth = False
         ###################### receive input ######################
+        print("here")
         result = receive_images(init_variables, flag_depth)
         if result == None:
             continue
-
+        print("here2")
         color, depth = result
 
         # Display RGBD pair ---------------------------------------------------

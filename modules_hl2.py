@@ -23,7 +23,7 @@ class Hl2Manager():
         buffer_size = 2
 
         # Start PV Subsystem ------------------------------------------------------
-        hl2ss_lnm.start_subsystem_pv(host, hl2ss.StreamPort.PERSONAL_VIDEO)
+        hl2ss_lnm.start_subsystem_pv(host, hl2ss.StreamPort.PERSONAL_VIDEO) #port : 3810
 
         # Get RM Depth AHAT calibration -------------------------------------------
         # Calibration data will be downloaded if it's not in the calibration folder

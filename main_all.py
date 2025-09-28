@@ -14,7 +14,7 @@ import socket, threading
 import multiprocessing as mp
 
 # from modules_hand import HandTracker_mp, HandTracker_our
-# from handtracker.utils.visualize import draw_2d_skeleton
+# from utils.visualize import draw_2d_skeleton
 
 # from modules_gesture import GestureClassfier, recog_contact
 # from modules_obj import ObjTracker

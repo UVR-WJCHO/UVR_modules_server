@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class MeshReconstructor():
-    def __init__(self, modelpath):
+    def __init__(self, modelpath='pretrain/diffusion'):
         # Load a pipeline from a model folder or a Hugging Face model hub.
         self.pipeline = TrellisImageTo3DPipeline.from_pretrained(modelpath)
         self.pipeline.cuda()
@@ -25,14 +25,15 @@ class MeshReconstructor():
         outputs = self.pipeline.run(image, seed=1,
             # Optional parameters
             sparse_structure_sampler_params={
-                "steps": 12,    # 25
+                "steps": 25,    # 12, 25
                 "cfg_strength": 7.5,
             },
             slat_sampler_params={
-                "steps": 10,    # 25
+                "steps": 15,    # 10, 25
                 "cfg_strength": 3,
             },
         )
+
 
         glb = postprocessing_utils.to_glb(
             outputs['gaussian'][0],
@@ -40,7 +41,7 @@ class MeshReconstructor():
             # Optional parameters
             simplify=0.95,  # Ratio of triangles to remove in the simplification process
             texture_size=1024,  # Size of the texture used for the GLB
-            bake_mode='fast'    # 'fast', 'opt'
+            bake_mode='opt'    # 'fast', 'opt'
         )
         return glb
 
@@ -49,7 +50,7 @@ def main():
     import time
     savepath = './outputs'
     modelpath = 'pretrain/diffusion'
-    condpath = './examples/test_1.jpg'
+    condpath = './examples/part0_1.jpg'
     savepath = os.path.join(savepath, condpath.split('/')[-1].split('.')[0])
 
     os.makedirs(savepath, exist_ok=True)

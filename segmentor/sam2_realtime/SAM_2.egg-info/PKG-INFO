@@ -1,0 +1,76 @@
+Metadata-Version: 2.4
+Name: SAM-2
+Version: 1.0
+Summary: SAM 2: Segment Anything in Images and Videos
+Home-page: https://github.com/facebookresearch/sam2
+Author: Meta AI
+Author-email: segment-anything@meta.com
+License: Apache 2.0
+Requires-Python: >=3.10.0
+Description-Content-Type: text/markdown
+License-File: LICENSE
+License-File: LICENSE_cctorch
+Requires-Dist: numpy>=1.24.4
+Requires-Dist: tqdm>=4.66.1
+Requires-Dist: hydra-core>=1.3.2
+Requires-Dist: iopath>=0.1.10
+Requires-Dist: pillow>=9.4.0
+Provides-Extra: notebooks
+Requires-Dist: matplotlib>=3.9.1; extra == "notebooks"
+Requires-Dist: jupyter>=1.0.0; extra == "notebooks"
+Requires-Dist: opencv-python>=4.7.0; extra == "notebooks"
+Requires-Dist: eva-decord>=0.6.1; extra == "notebooks"
+Provides-Extra: interactive-demo
+Requires-Dist: Flask>=3.0.3; extra == "interactive-demo"
+Requires-Dist: Flask-Cors>=5.0.0; extra == "interactive-demo"
+Requires-Dist: av>=13.0.0; extra == "interactive-demo"
+Requires-Dist: dataclasses-json>=0.6.7; extra == "interactive-demo"
+Requires-Dist: eva-decord>=0.6.1; extra == "interactive-demo"
+Requires-Dist: gunicorn>=23.0.0; extra == "interactive-demo"
+Requires-Dist: imagesize>=1.4.1; extra == "interactive-demo"
+Requires-Dist: pycocotools>=2.0.8; extra == "interactive-demo"
+Requires-Dist: strawberry-graphql>=0.243.0; extra == "interactive-demo"
+Provides-Extra: dev
+Requires-Dist: black==24.2.0; extra == "dev"
+Requires-Dist: usort==1.0.2; extra == "dev"
+Requires-Dist: ufmt==2.0.0b2; extra == "dev"
+Requires-Dist: fvcore>=0.1.5.post20221221; extra == "dev"
+Requires-Dist: pandas>=2.2.2; extra == "dev"
+Requires-Dist: scikit-image>=0.24.0; extra == "dev"
+Requires-Dist: tensorboard>=2.17.0; extra == "dev"
+Requires-Dist: pycocotools>=2.0.8; extra == "dev"
+Requires-Dist: tensordict>=0.6.0; extra == "dev"
+Requires-Dist: opencv-python>=4.7.0; extra == "dev"
+Requires-Dist: submitit>=1.5.1; extra == "dev"
+Dynamic: author
+Dynamic: author-email
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: license
+Dynamic: license-file
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+# SAM2-Realtime
+This code is based on SAM2. For realtime task, some methods are added.
+
+## License
+
+The SAM 2 model checkpoints, SAM 2 demo code (front-end and back-end), and SAM 2 training code are licensed under [Apache 2.0](./LICENSE), however the [Inter Font](https://github.com/rsms/inter?tab=OFL-1.1-1-ov-file) and [Noto Color Emoji](https://github.com/googlefonts/noto-emoji) used in the SAM 2 demo code are made available under the [SIL Open Font License, version 1.1](https://openfontlicense.org/open-font-license-official-text/).
+
+## Citing SAM 2
+
+If you use SAM 2 or the SA-V dataset in your research, please use the following BibTeX entry.
+
+```bibtex
+@article{ravi2024sam2,
+  title={SAM 2: Segment Anything in Images and Videos},
+  author={Ravi, Nikhila and Gabeur, Valentin and Hu, Yuan-Ting and Hu, Ronghang and Ryali, Chaitanya and Ma, Tengyu and Khedr, Haitham and R{\"a}dle, Roman and Rolland, Chloe and Gustafson, Laura and Mintun, Eric and Pan, Junting and Alwala, Kalyan Vasudev and Carion, Nicolas and Wu, Chao-Yuan and Girshick, Ross and Doll{\'a}r, Piotr and Feichtenhofer, Christoph},
+  journal={arXiv preprint arXiv:2408.00714},
+  url={https://arxiv.org/abs/2408.00714},
+  year={2024}
+}
+```

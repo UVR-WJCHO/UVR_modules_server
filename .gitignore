@@ -6,3 +6,5 @@ pretrain/*
 
 handtracker/checkpoint/*
 handtracker_wilor/pretrained_models/*
+
+segmentor/sam2_realtime/checkpoints/*

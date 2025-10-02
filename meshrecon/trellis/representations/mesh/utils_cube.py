@@ -53,6 +53,7 @@ def get_dense_attrs(coords : torch.Tensor, feats : torch.Tensor, res : int, sdf_
     if sdf_init:
         dense_attrs[..., 0] = 1 # initial outside sdf value
     dense_attrs[coords[:, 0], coords[:, 1], coords[:, 2], :] = feats
+
     return dense_attrs.reshape(-1, F)
 
 

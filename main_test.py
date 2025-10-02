@@ -12,10 +12,6 @@ host = '192.168.50.31'  # HoloLens2 wifi address
 # HTTP 서버 설정
 HTTP_PORT = 8000
 
-## check before execution
-# - sudo lsof -i :8000
-# - sudo kill -9 {}
-
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
     """GLB 파일을 제공하는 커스텀 HTTP 핸들러"""
 

@@ -16,6 +16,11 @@ from modules_segment import HOSegmentor
 from modules_hl2 import Hl2Manager
 
 
+## check before execution
+# - sudo lsof -i :8000
+# - sudo kill -9 {}
+
+
 ## Set HoloLens2 options ##
 host = '192.168.50.31'  # HoloLens2 wifi address
 

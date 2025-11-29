@@ -2,7 +2,6 @@ __pycache__
 
 calibration/rm_depth_ahat/*
 outputs/*
-pretrain/*
 
 handtracker/checkpoint/*
 handtracker_wilor/pretrained_models/*

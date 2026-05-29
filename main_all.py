@@ -107,7 +107,7 @@ def main():
                 print("no results")
                 continue
 
-            color, depth = result
+            color, depth, intrinsic_per_frame = result
 
             cv2.imshow('RGB', color)
             cv2.waitKey(1)
@@ -145,6 +145,9 @@ def main():
                     cv2.imwrite((f"./rgb_masked_{obj_idx}.png"), masked_color)
                     np.save(f"./depth_{obj_idx}.npy", depth)
                     print("save images")
+
+                    # save auto adjusted intrinsic per frame
+                    np.save(f"./intrinsic_{obj_idx}.npy", intrinsic_per_frame)
 
                     if not flag_skip_mesh:
                         try:

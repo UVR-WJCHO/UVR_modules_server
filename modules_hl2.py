@@ -144,7 +144,7 @@ class Hl2Manager:
                 u1, v1 = pv_list[n, 2], pv_list[n, 3]
                 pv_z[v0:v1, u0:u1] = pv_list_depth[n]
 
-        return color, pv_z
+        return color, pv_z, np.copy(self.pv_intrinsics)
 
     def destory(self):
         """Stops all running hl2ss streams and subsystems."""

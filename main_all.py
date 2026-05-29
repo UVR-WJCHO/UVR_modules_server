@@ -22,7 +22,7 @@ from modules_hl2 import Hl2Manager
 
 
 ## Set HoloLens2 options ##
-host = '192.168.50.31'  # HoloLens2 wifi address
+host = '192.168.50.137'  # HoloLens2 wifi address
 
 pv_width = 1280
 pv_height = 720
@@ -34,6 +34,8 @@ tty.setcbreak(fd)
 
 # HTTP 서버 설정
 HTTP_PORT = 8000
+
+flag_skip_mesh = False
 
 
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -80,22 +82,29 @@ def main():
     time.sleep(0.5)
 
     ###################### init models ######################
+    print("\n[Init] Initializing HOSegmentor...")
     hosegmentor = HOSegmentor()
-    meshrecon = MeshReconstructor()
+    print("\n[Init] Initializing MeshReconstructor...")
+    if not flag_skip_mesh:
+        meshrecon = MeshReconstructor()
 
     ###################### init hl2 ######################
+    print("\n[Init] Initializing Hl2Manager...")
     hl2_manager = Hl2Manager(host, pv_width, pv_height, pv_fps)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(2.0)
 
     is_first_call = True
     frame_idx = 0
+    obj_idx = 0
 
+    print("\n[Init] Starting loop")
     try:
         while True:
             ###################### receive input ######################
             result = hl2_manager.receive_images(flag_depth=True)
             if result == None:
+                print("no results")
                 continue
 
             color, depth = result
@@ -132,30 +141,38 @@ def main():
 
                     masked_color_pil = Image.fromarray(masked_color)
 
-                    try:
-                        mesh_glb = meshrecon.run(masked_color_pil)
+                    cv2.imwrite((f"./rgb_{obj_idx}.png"), color)
+                    cv2.imwrite((f"./rgb_masked_{obj_idx}.png"), masked_color)
+                    np.save(f"./depth_{obj_idx}.npy", depth)
+                    print("save images")
 
-                        output_path = "./output.glb"
-                        mesh_glb.export(output_path)
-                        print(f"[Mesh] Saved to {output_path}")
+                    if not flag_skip_mesh:
+                        try:
+                            mesh_glb = meshrecon.run(masked_color_pil)
 
-                        # HoloLens2에 신호 전송
-                        signal = b"1"
-                        sock.sendto(signal, (host, 5005))
-                        print(f"[UDP] Signal sent to {host}:5005")
+                            output_path = f"./mesh_{obj_idx}.glb"
+                            mesh_glb.export(output_path)
+                            print(f"[Mesh] Saved to {output_path}")
 
-                        # local_ip = sock_check.gethostbyname(sock_check.gethostname())
-                        # print(f"[Info] GLB available at http://{local_ip}:{HTTP_PORT}/output.glb")
+                            # HoloLens2에 신호 전송
+                            signal = b"1"
+                            sock.sendto(signal, (host, 5005))
+                            print(f"[UDP] Signal sent to {host}:5005")
 
-                    except Exception as e:
-                        print(f"[Error] Mesh reconstruction failed: {e}")
-                    finally:
-                        # 메시 재구성 객체 삭제 및 메모리 정리
-                        del mesh_glb
-                        del masked_color_pil
+                            # local_ip = sock_check.gethostbyname(sock_check.gethostname())
+                            # print(f"[Info] GLB available at http://{local_ip}:{HTTP_PORT}/output.glb")
 
-                        clear_gpu_memory()
-                        print_gpu_memory()
+                        except Exception as e:
+                            print(f"[Error] Mesh reconstruction failed: {e}")
+                        finally:
+                            # 메시 재구성 객체 삭제 및 메모리 정리
+                            del mesh_glb
+                            del masked_color_pil
+
+                            clear_gpu_memory()
+                            print_gpu_memory()
+
+                    obj_idx += 1
 
                     print("[Info] Ready for next reconstruction (Press Space)")
                     # break 제거 - 계속 루프 실행
@@ -164,7 +181,8 @@ def main():
         print("\n[Info] Shutting down...")
 
     finally:
-        del meshrecon
+        if not flag_skip_mesh:
+            del meshrecon
         del hosegmentor
         clear_gpu_memory()
 

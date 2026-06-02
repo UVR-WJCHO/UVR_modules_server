@@ -146,7 +146,7 @@ class Hl2Manager:
 
         return color, pv_z, np.copy(self.pv_intrinsics)
 
-    def destory(self):
+    def destroy(self):
         """Stops all running hl2ss streams and subsystems."""
         # Stop PV and RM Depth AHAT streams
         self.sink_pv.detach()

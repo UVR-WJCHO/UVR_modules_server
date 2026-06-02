@@ -148,6 +148,7 @@ def main():
 
                     # save auto adjusted intrinsic per frame
                     np.save(f"./intrinsic_{obj_idx}.npy", intrinsic_per_frame)
+                    print("intrinsic : ", intrinsic_per_frame)
 
                     if not flag_skip_mesh:
                         try:

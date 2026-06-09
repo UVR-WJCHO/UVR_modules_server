@@ -1,0 +1,35 @@
+{
+  "parts": [
+    {
+      "name": "stage_0_start",
+      "translation": [-0.005876, 0, 0.16554],
+      "rotation_euler_degrees": [0, 0, 0],
+      "scale": [1.000, 1.000, 1.000]
+    },
+    {
+      "name": "stage_1_start",
+      "translation": [-0.005876, -0.003636, 0.71148],
+      "rotation_euler_degrees": [0, 0, 0],
+      "scale": [1.000, 1.000, 1.000]
+    },
+    {
+      "name": "stage_2_start",
+      "translation": [-0.01271, -0.007036, 1.4631],
+      "rotation_euler_degrees": [0, 0, 0],
+      "scale": [0.730, 0.730, 0.730]
+    },
+    {
+      "name": "stage_3_start",
+      "translation": [-0.000407, -0.011755, 2.0205],
+      "rotation_quaternion": [1.000, 0.019, 0.000, 0.000],
+      "rotation_euler_degrees": [2.178, 0, 0],
+      "scale": [0.750, 0.750, 0.750]
+    },
+    {
+      "name": "stage_4_start",
+      "translation": [-0.000449, 0.000592, 2.6459],
+      "rotation_euler_degrees": [0, 0, 0],
+      "scale": [0.750, 0.750, 0.750]
+    }
+  ]
+}

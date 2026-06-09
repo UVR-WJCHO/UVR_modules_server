@@ -1,0 +1,115 @@
+{
+    "version": 1,
+    "parts": [
+        {
+            "objectName": "control_parts0",
+            "colorHex": "#00FFFF",
+            "colorAlpha": 1.0,
+            "metalic": 0.0,
+            "smoothness": 0.5,
+            "texture": "",
+            "textureList": [],
+            "material": "aluminium",
+            "affordance": "attach",
+            "rangeProperties": [
+                { "label": "youngs_modulus_GPa",              "min": 68.0,  "max": 75.0   },
+                { "label": "density_g_cm3",                   "min": 2.6,   "max": 2.85   },
+                { "label": "poissons_ratio",                  "min": 0.32,  "max": 0.36   },
+                { "label": "tensile_strength_MPa",            "min": 70.0,  "max": 600.0  },
+                { "label": "hardness_HV",                     "min": 20.0,  "max": 180.0  },
+                { "label": "thermal_conductivity_W_mK",       "min": 120.0, "max": 235.0  },
+                { "label": "electrical_conductivity_MS_m",    "min": 18.0,  "max": 38.0   },
+                { "label": "thermal_expansion_coeff_1e-6_K",  "min": 21.0,  "max": 24.0   },
+                { "label": "fracture_toughness_MPa_sqrt_m",   "min": 15.0,  "max": 45.0   }
+            ]
+        },
+        {
+            "objectName": "control_parts1",
+            "colorHex": "#FF0000",
+            "colorAlpha": 1.0,
+            "metalic": 0.0,
+            "smoothness": 0.5,
+            "texture": "",
+            "textureList": [],
+            "material": "aluminium",
+            "affordance": "attach",
+            "rangeProperties": [
+                { "label": "youngs_modulus_GPa",              "min": 68.0,  "max": 75.0   },
+                { "label": "density_g_cm3",                   "min": 2.6,   "max": 2.85   },
+                { "label": "poissons_ratio",                  "min": 0.32,  "max": 0.36   },
+                { "label": "tensile_strength_MPa",            "min": 70.0,  "max": 600.0  },
+                { "label": "hardness_HV",                     "min": 20.0,  "max": 180.0  },
+                { "label": "thermal_conductivity_W_mK",       "min": 120.0, "max": 235.0  },
+                { "label": "electrical_conductivity_MS_m",    "min": 18.0,  "max": 38.0   },
+                { "label": "thermal_expansion_coeff_1e-6_K",  "min": 21.0,  "max": 24.0   },
+                { "label": "fracture_toughness_MPa_sqrt_m",   "min": 15.0,  "max": 45.0   }
+            ]
+        },
+        {
+            "objectName": "control_parts2",
+            "colorHex": "#12FF00",
+            "colorAlpha": 1.0,
+            "metalic": 0.0,
+            "smoothness": 0.5,
+            "texture": "",
+            "textureList": [],
+            "material": "aluminium",
+            "affordance": "attach",
+            "rangeProperties": [
+                { "label": "youngs_modulus_GPa",              "min": 68.0,  "max": 75.0   },
+                { "label": "density_g_cm3",                   "min": 2.6,   "max": 2.85   },
+                { "label": "poissons_ratio",                  "min": 0.32,  "max": 0.36   },
+                { "label": "tensile_strength_MPa",            "min": 70.0,  "max": 600.0  },
+                { "label": "hardness_HV",                     "min": 20.0,  "max": 180.0  },
+                { "label": "thermal_conductivity_W_mK",       "min": 120.0, "max": 235.0  },
+                { "label": "electrical_conductivity_MS_m",    "min": 18.0,  "max": 38.0   },
+                { "label": "thermal_expansion_coeff_1e-6_K",  "min": 21.0,  "max": 24.0   },
+                { "label": "fracture_toughness_MPa_sqrt_m",   "min": 15.0,  "max": 45.0   }
+            ]
+        },
+        {
+            "objectName": "control_parts3",
+            "colorHex": "#FFD100",
+            "colorAlpha": 1.0,
+            "metalic": 0.0,
+            "smoothness": 0.5,
+            "texture": "",
+            "textureList": [],
+            "material": "aluminium",
+            "affordance": "attach",
+            "rangeProperties": [
+                { "label": "youngs_modulus_GPa",              "min": 68.0,  "max": 75.0   },
+                { "label": "density_g_cm3",                   "min": 2.6,   "max": 2.85   },
+                { "label": "poissons_ratio",                  "min": 0.32,  "max": 0.36   },
+                { "label": "tensile_strength_MPa",            "min": 70.0,  "max": 600.0  },
+                { "label": "hardness_HV",                     "min": 20.0,  "max": 180.0  },
+                { "label": "thermal_conductivity_W_mK",       "min": 120.0, "max": 235.0  },
+                { "label": "electrical_conductivity_MS_m",    "min": 18.0,  "max": 38.0   },
+                { "label": "thermal_expansion_coeff_1e-6_K",  "min": 21.0,  "max": 24.0   },
+                { "label": "fracture_toughness_MPa_sqrt_m",   "min": 15.0,  "max": 45.0   }
+            ]
+        },
+        {
+            "objectName": "control_parts4",
+            "colorHex": "#FFFFFF",
+            "colorAlpha": 1.0,
+            "metalic": 0.0,
+            "smoothness": 0.5,
+            "texture": "",
+            "textureList": [],
+            "material": "aluminium",
+            "affordance": "attach",
+            "rangeProperties": [
+                { "label": "youngs_modulus_GPa",              "min": 68.0,  "max": 75.0   },
+                { "label": "density_g_cm3",                   "min": 2.6,   "max": 2.85   },
+                { "label": "poissons_ratio",                  "min": 0.32,  "max": 0.36   },
+                { "label": "tensile_strength_MPa",            "min": 70.0,  "max": 600.0  },
+                { "label": "hardness_HV",                     "min": 20.0,  "max": 180.0  },
+                { "label": "thermal_conductivity_W_mK",       "min": 120.0, "max": 235.0  },
+                { "label": "electrical_conductivity_MS_m",    "min": 18.0,  "max": 38.0   },
+                { "label": "thermal_expansion_coeff_1e-6_K",  "min": 21.0,  "max": 24.0   },
+                { "label": "fracture_toughness_MPa_sqrt_m",   "min": 15.0,  "max": 45.0   }
+            ]
+        }
+    ]
+}

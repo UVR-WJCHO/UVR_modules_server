@@ -13,6 +13,7 @@ import gc
 
 from modules_mesh import MeshReconstructor
 from modules_segment import HOSegmentor
+from modules_hotrack import InteractiveHoTrackSegmentor
 from modules_hl2 import Hl2Manager
 
 
@@ -36,6 +37,7 @@ tty.setcbreak(fd)
 HTTP_PORT = 8000
 
 flag_skip_mesh = False
+flag_interactive_hotrack = os.getenv("UVR_USE_INTERACTIVE_HOTRACK", "1") != "0"
 
 
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -82,8 +84,31 @@ def main():
     time.sleep(0.5)
 
     ###################### init models ######################
-    print("\n[Init] Initializing HOSegmentor...")
-    hosegmentor = HOSegmentor()
+    if flag_interactive_hotrack:
+        print("\n[Init] Initializing InteractiveHoTrackSegmentor...")
+        hosegmentor = InteractiveHoTrackSegmentor(
+            output_dir=os.getenv("UVR_HOTRACK_OUTPUT_DIR", "output/hotrack_stage1"),
+            video_name=os.getenv("UVR_HOTRACK_VIDEO_NAME", "hl2_online"),
+            yolo_model_path=os.getenv("UVR_HOTRACK_YOLO_MODEL", "segmentor/100DOH_small.pt"),
+            sam2_variant=os.getenv("UVR_HOTRACK_SAM2_VARIANT", "tiny"),
+            sam2_checkpoint=os.getenv("UVR_HOTRACK_SAM2_CHECKPOINT", ""),
+            max_side=int(os.getenv("UVR_HOTRACK_MAX_SIDE", "960")),
+            detect_interval=int(os.getenv("UVR_HOTRACK_DETECT_INTERVAL", "3")),
+            max_active_objects=int(os.getenv("UVR_HOTRACK_MAX_OBJECTS", "5")),
+            max_active_hands=int(os.getenv("UVR_HOTRACK_MAX_HANDS", "2")),
+            track_hands=os.getenv("UVR_HOTRACK_TRACK_HANDS", "0") == "1",
+            include_hands=os.getenv("UVR_HOTRACK_INCLUDE_HANDS", "0") == "1",
+            hand_backend=os.getenv("UVR_HOTRACK_HAND_BACKEND", "auto"),
+            save_masks=os.getenv("UVR_HOTRACK_SAVE_MASKS", "1") != "0",
+            interactive_window=os.getenv("UVR_HOTRACK_WINDOW", "1") != "0",
+            offload_video_to_cpu=os.getenv("UVR_HOTRACK_OFFLOAD_VIDEO", "1") != "0",
+            offload_state_to_cpu=os.getenv("UVR_HOTRACK_OFFLOAD_STATE", "1") != "0",
+            state_window=int(os.getenv("UVR_HOTRACK_STATE_WINDOW", "9")),
+            log_memory=os.getenv("UVR_HOTRACK_LOG_MEMORY", "0") == "1",
+        )
+    else:
+        print("\n[Init] Initializing legacy HOSegmentor...")
+        hosegmentor = HOSegmentor()
     print("\n[Init] Initializing MeshReconstructor...")
     if not flag_skip_mesh:
         meshrecon = MeshReconstructor()
@@ -110,27 +135,49 @@ def main():
             color, depth, intrinsic_per_frame = result
 
             cv2.imshow('RGB', color)
-            cv2.waitKey(1)
+            rgb_key = cv2.waitKey(1)
+            if flag_interactive_hotrack:
+                hosegmentor.handle_key(rgb_key)
+                if hosegmentor.quit_requested:
+                    break
 
             ###################### process ######################
-            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                depth_cm = depth * 10.0
-                hotrack_datas = hosegmentor.get_hotrack_datas(color, depth_cm)
+            if flag_interactive_hotrack:
+                with torch.inference_mode():
+                    h_color_image, result_masks, _ = hosegmentor.process_frame(color.copy())
+                    key = cv2.waitKey(1)
+                    hosegmentor.handle_key(key)
+                    frame_idx += 1
+                    if hosegmentor.quit_requested:
+                        break
+                    if len(result_masks) == 0:
+                        continue
+                    obj_mask = result_masks[0]
+                    masked_color = np.where(obj_mask[..., None] == 1, color, 3)
+                    cv2.imshow("Segmentation", masked_color)
+                    key = cv2.waitKey(1)
+                    hosegmentor.handle_key(key)
+                    if hosegmentor.quit_requested:
+                        break
+            else:
+                with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    depth_cm = depth * 10.0
+                    hotrack_datas = hosegmentor.get_hotrack_datas(color, depth_cm)
 
-                h_color_image, result_masks = hosegmentor.run(color.copy(), depth_cm, hotrack_datas,
-                                                              is_first_call,
-                                                              frame_idx)
-                is_first_call = False
-                frame_idx += 1
+                    h_color_image, result_masks = hosegmentor.run(color.copy(), depth_cm, hotrack_datas,
+                                                                  is_first_call,
+                                                                  frame_idx)
+                    is_first_call = False
+                    frame_idx += 1
 
-                if len(result_masks) == 0:
-                    continue
+                    if len(result_masks) == 0:
+                        continue
 
-                obj_mask = result_masks[0]
+                    obj_mask = result_masks[0]
 
-                masked_color = np.where(obj_mask[..., None] == 1, color, 3)
-                cv2.imshow("Segmentation", masked_color)
-                cv2.waitKey(1)
+                    masked_color = np.where(obj_mask[..., None] == 1, color, 3)
+                    cv2.imshow("Segmentation", masked_color)
+                    cv2.waitKey(1)
 
             # 스페이스바 입력 확인
             dr, dw, de = select.select([sys.stdin], [], [], 0.01)
@@ -187,6 +234,8 @@ def main():
     finally:
         if not flag_skip_mesh:
             del meshrecon
+        if hasattr(hosegmentor, "close"):
+            hosegmentor.close()
         del hosegmentor
         clear_gpu_memory()
 

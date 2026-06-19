@@ -1,24 +1,24 @@
 # Interactive HoTrack Stage 1
 
-This branch wires the online interactive HoTrack stage-1 tracker into the existing `main_all.py` entry point.
+This branch wires the hograph_plus Hotrack track-only flow into the existing `main_all.py` entry point.
 
 ## What It Does
 
 - Receives live HL2 RGB/depth frames through the existing `Hl2Manager` loop.
-- Automatically detects hand-object interactions with `segmentor/100DOH_small.pt`.
-- Adds only the interacting object masks to SAM2 realtime tracking by default.
+- Automatically detects hand-object interactions with the hograph_plus `weights/yolo_100doh_best.pt` detector (`targetobject/hand_*` classes).
+- Calls `Hotrack.process_frame_with_tracking()` directly and applies the same hograph_plus track-only runtime flags.
 - Saves every tracked/edited mask as files under `output/hotrack_stage1/<video_name>/`.
 - Allows interactive mask selection, deletion, current-frame removal, and brush edits.
 
-It intentionally does not run mask merge/split/re-id, graph construction, or event detection.
+It intentionally disables hograph/graph execution and sanitizes structural merge/split/id-transition fields, matching hograph_plus `runtime_mode=track_only`.
 
 ## Run
 
-Place a SAM2.1 checkpoint in the ignored checkpoint directory, for example:
+Place the hograph_plus YOLO checkpoint and a SAM2.1 checkpoint in ignored local paths:
 
 ```bash
-mkdir -p segmentor/sam2_realtime/checkpoints
-# copy or download the checkpoint here:
+mkdir -p weights segmentor/sam2_realtime/checkpoints
+# weights/yolo_100doh_best.pt
 # segmentor/sam2_realtime/checkpoints/sam2.1_hiera_tiny.pt
 ```
 
@@ -55,28 +55,28 @@ Default output path:
 
 ```text
 output/hotrack_stage1/hl2_online/
-  _meta.json
-  ops_log.jsonl
-  frames/000000.json
-  masks_png/000000/id_000100.png
-  overlays/000000.jpg
+  track_only_summary.json
+  tracking/json/000000_online_track.json
+  masks_png/000000_online/id_000100.png
+  overlays/000000_online.jpg
+  000000_online_masks.json
 ```
 
-Masks are saved as single-channel PNG files. Object ids start at `100`; hand ids are reserved below `100` and are not saved unless hand tracking/output is explicitly enabled.
+Masks are saved as single-channel PNG files for object ids (`>=100`). The tracking JSON is the hograph_plus Hotrack payload with `runtime_mode=track_only` and empty `struct_events`, `id_transitions`, and `id_remap`.
 
 ## Useful Environment Variables
 
 - `UVR_HOTRACK_OUTPUT_DIR`: base output directory, default `output/hotrack_stage1`.
 - `UVR_HOTRACK_VIDEO_NAME`: run name, default `hl2_online`.
-- `UVR_HOTRACK_SAM2_VARIANT`: `tiny`, `small`, `base_plus`, or `large`; default `tiny` to avoid OOM.
-- `UVR_HOTRACK_SAM2_CHECKPOINT`: explicit checkpoint path.
-- `UVR_HOTRACK_MAX_SIDE`: resize long side before SAM2, default `960`.
-- `UVR_HOTRACK_DETECT_INTERVAL`: YOLO detection interval, default `3` frames.
-- `UVR_HOTRACK_MAX_OBJECTS`: max active object tracks, default `5`.
-- `UVR_HOTRACK_TRACK_HANDS`: set `1` to track hands as SAM2 ids.
-- `UVR_HOTRACK_INCLUDE_HANDS`: set `1` to include hand masks in overlays/saved masks.
-- `UVR_HOTRACK_HAND_BACKEND`: `auto`, `mediapipe`, `yolo`, or `none`.
-- `UVR_HOTRACK_OFFLOAD_VIDEO`: default `1`, keeps frames off GPU memory when possible.
-- `UVR_HOTRACK_OFFLOAD_STATE`: default `1`, keeps tracker state off GPU memory when possible.
-- `UVR_HOTRACK_STATE_WINDOW`: number of recent frames to keep in memory, default `9`.
-- `UVR_HOTRACK_LOG_MEMORY`: set `1` to print GPU memory per frame.
+- `UVR_HOTRACK_YOLO_MODEL`: hograph_plus HO detector checkpoint, default `weights/yolo_100doh_best.pt`.
+- `UVR_HOTRACK_SAM2_VARIANT`: `tiny`, `small`, `base_plus`, or `large`; default `tiny`.
+- `UVR_HOTRACK_SAM2_CHECKPOINT`: explicit SAM2 checkpoint path.
+- `UVR_HOTRACK_MAX_SIDE`: optional resize long side before Hotrack/SAM2, default `0` (disabled, hograph_plus-compatible).
+- `UVR_HOTRACK_HO_THRESH_HAND`: hand detector threshold, default `0.55`.
+- `UVR_HOTRACK_HO_THRESH_OBJ`: object detector threshold, default `0.55`.
+- `UVR_HOTRACK_TARGET_CONTACT`: target hand contact code, default `P`.
+- `UVR_HOTRACK_BACKFILL_WINDOW`: Hotrack backfill history length for online mode, default `120`.
+- `UVR_HOTRACK_SAVE_TRACKING_JSON`: save hograph_plus tracking JSON, default `1`.
+- `UVR_HOTRACK_DINO_ALLOW_DOWNLOAD`: allow transformers to download DINO weights if needed, default `0`.
+
+If the checkpoints already live in a sibling hograph_plus workspace, set `HOGRAPH_PLUS_ROOT=/path/to/hograph_plus`; the wrapper falls back to `weights/yolo_100doh_best.pt` and `third_party/sam2_realtime/checkpoints/*.pt` there when local files are missing.

@@ -6,7 +6,7 @@ This branch wires the hograph_plus Hotrack track-only flow into the existing `ma
 
 - Receives live HL2 RGB/depth frames through the existing `Hl2Manager` loop.
 - Automatically detects hand-object interactions with the hograph_plus `weights/yolo_100doh_best.pt` detector (`targetobject/hand_*` classes).
-- Calls `Hotrack.process_frame_with_tracking()` directly and applies the same hograph_plus track-only runtime flags.
+- Calls `Hotrack.process_frame_with_tracking()` directly and applies the same hograph_plus track-only runtime flags (`track_hand_masks=False`, `skip_existing_object_box_prompts=True`).
 - Saves every tracked/edited mask as files under `output/hotrack_stage1/<video_name>/`.
 - Allows interactive mask selection, deletion, current-frame removal, and brush edits.
 

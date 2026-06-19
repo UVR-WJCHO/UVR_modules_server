@@ -76,6 +76,8 @@ def _sanitize_track_only_tracking_json(track_path: Path) -> None:
 def apply_track_only_hotrack_runtime_flags(hotrack: Any) -> None:
     """Mirror hograph_plus HographPipelineRunner._apply_track_only_hotrack_runtime_flags."""
     hotrack.enable_structural_ops = False
+    hotrack.track_hand_masks = False
+    hotrack.skip_existing_object_box_prompts = True
     hotrack.use_hand_matched_det_boxes_only = True
     hotrack.use_all_object_boxes = False
     hotrack.enable_component_promote_from_det = True
@@ -242,6 +244,8 @@ class InteractiveHoTrackSegmentor:
     def track_only_flags(self) -> Dict[str, bool]:
         return {
             "enable_structural_ops": bool(getattr(self.hotrack, "enable_structural_ops", False)),
+            "track_hand_masks": bool(getattr(self.hotrack, "track_hand_masks", True)),
+            "skip_existing_object_box_prompts": bool(getattr(self.hotrack, "skip_existing_object_box_prompts", False)),
             "use_dino_id": bool(getattr(self.hotrack, "use_dino_id", False)),
             "enable_id_recovery": bool(getattr(self.hotrack, "enable_id_recovery", False)),
             "compute_dino_similarity": bool(getattr(self.hotrack, "compute_dino_similarity", False)),

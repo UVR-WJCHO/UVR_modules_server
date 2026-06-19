@@ -454,6 +454,16 @@ class Hotrack:
         self.use_all_object_boxes: bool = False
         # Strict mode: downstream logic uses only hand-matched detector boxes.
         self.use_hand_matched_det_boxes_only: bool = True
+        # Track hands as SAM2 mask IDs. Paper mode keeps this enabled for
+        # mask-level hand/object reasoning; track-only can use detector hand
+        # boxes as lightweight proxy masks instead.
+        self.track_hand_masks: bool = True
+        # Skip expensive SAM2 prompt calls when a detector target box already
+        # matches an active tracked object. This is intended for fast track-only
+        # operation; paper mode keeps the legacy per-frame prompt behavior.
+        self.skip_existing_object_box_prompts: bool = False
+        self.existing_object_box_iou_skip_th: float = 0.25
+        self.existing_object_box_cover_skip_th: float = 0.55
         
         # Quality scoring (select best if multiple candidates)
         # 0 or negative => unlimited new objects accepted per frame.
@@ -7508,6 +7518,24 @@ class Hotrack:
         detections["suppressed_large_target_rows"] = suppressed_large_target_matches
 
         current_hand_boxes = [hand["bbox_xyxy"] for hand in detected_hands]
+        current_hand_proxy_masks: List[np.ndarray] = []
+        if not bool(getattr(self, "track_hand_masks", True)):
+            for hb in list(current_hand_boxes or []):
+                if not isinstance(hb, (list, tuple)) or len(hb) != 4:
+                    continue
+                try:
+                    x1, y1, x2, y2 = [int(v) for v in list(hb)[:4]]
+                except Exception:
+                    continue
+                x1 = max(0, min(int(width - 1), x1))
+                x2 = max(0, min(int(width), x2))
+                y1 = max(0, min(int(height - 1), y1))
+                y2 = max(0, min(int(height), y2))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                hm = np.zeros((height, width), dtype=bool)
+                hm[y1:y2, x1:x2] = True
+                current_hand_proxy_masks.append(hm)
         current_object_boxes = target_boxes
         self._current_target_boxes = target_boxes
         self._prune_ambiguous_regions()
@@ -7628,6 +7656,19 @@ class Hotrack:
         
         hand_ids = [i for i in self.all_ids if i < 100]
         object_ids = [i for i in self.all_ids if i >= 100]
+        if not bool(getattr(self, "track_hand_masks", True)) and hand_ids:
+            for hid in list(hand_ids):
+                try:
+                    self.all_ids, _ = self.sam2_tracker.remove_object(
+                        self.inference_state, int(hid), strict=False, need_output=False
+                    )
+                except Exception:
+                    pass
+                tracked_masks.pop(int(hid), None)
+                tracked_boxes.pop(int(hid), None)
+                self.mask_history.pop(int(hid), None)
+            hand_ids = []
+            self.all_ids = [int(x) for x in self.all_ids if int(x) >= 100]
 
         # Remove hands that are included in another hand (subset)
         if len(hand_ids) >= 2:
@@ -7935,7 +7976,7 @@ class Hotrack:
         new_hands: List[Dict[str, Any]] = []
         hand_sam2_input_debug: List[Dict[str, Any]] = []
         
-        if len(detected_hands) > len(hand_ids):
+        if bool(getattr(self, "track_hand_masks", True)) and len(detected_hands) > len(hand_ids):
             hand_candidates = []  # (hand_info, bbox, temp_id, mask)
             
             for hand in detected_hands:
@@ -8116,7 +8157,10 @@ class Hotrack:
         new_objects: List[Dict[str, Any]] = []
         
         # Get current hand masks for gating
-        hand_masks_list = [tracked_masks[hid] for hid in hand_ids if hid in tracked_masks]
+        if bool(getattr(self, "track_hand_masks", True)):
+            hand_masks_list = [tracked_masks[hid] for hid in hand_ids if hid in tracked_masks]
+        else:
+            hand_masks_list = list(current_hand_proxy_masks or [])
         hand_area_ref = 0.0
         if hand_masks_list:
             hand_areas = [float(np.sum(m)) for m in hand_masks_list if m is not None]
@@ -8170,6 +8214,43 @@ class Hotrack:
                                 f"[Hotrack] F{self.frame_idx} OBJ_SKIP: det_box "
                                 f"reason=bbox_ratio_{ratio_img:.2f}"
                             )
+                            continue
+                    if bool(getattr(self, "skip_existing_object_box_prompts", False)) and object_boxes:
+                        best_existing_iou = 0.0
+                        best_existing_cover = 0.0
+                        best_existing_id = None
+                        box_area_safe = float(max(1.0, box_area))
+                        for oid_existing, existing_box in list(object_boxes.items()):
+                            if not isinstance(existing_box, (list, tuple)) or len(existing_box) != 4:
+                                continue
+                            try:
+                                ex1, ey1, ex2, ey2 = [int(v) for v in list(existing_box)[:4]]
+                            except Exception:
+                                continue
+                            iou_val = float(bbox_iou([bx1, by1, bx2, by2], [ex1, ey1, ex2, ey2]))
+                            ix1 = max(int(bx1), int(ex1))
+                            iy1 = max(int(by1), int(ey1))
+                            ix2 = min(int(bx2), int(ex2))
+                            iy2 = min(int(by2), int(ey2))
+                            inter_area = float(max(0, ix2 - ix1) * max(0, iy2 - iy1))
+                            cover_val = float(inter_area / box_area_safe)
+                            if (iou_val, cover_val) > (best_existing_iou, best_existing_cover):
+                                best_existing_iou = float(iou_val)
+                                best_existing_cover = float(cover_val)
+                                best_existing_id = int(oid_existing)
+                        if (
+                            best_existing_iou >= float(self.existing_object_box_iou_skip_th)
+                            or best_existing_cover >= float(self.existing_object_box_cover_skip_th)
+                        ):
+                            reject_events.append({
+                                "kind": "object",
+                                "stage": "existing_track_box_gate",
+                                "reason": "matched_existing_track",
+                                "box": [int(v) for v in box],
+                                "matched_obj_id": int(best_existing_id) if best_existing_id is not None else None,
+                                "bbox_iou": float(best_existing_iou),
+                                "bbox_cover": float(best_existing_cover),
+                            })
                             continue
                 box_np = np.array(box, dtype=np.float32)
                 temp_obj_id = self.next_obj_id
@@ -9260,7 +9341,10 @@ class Hotrack:
         self._prev_fg_mask = fg_union
 
         # 7.25 Pending split logic for multi-component objects
-        hand_masks_list = [tracked_masks[hid] for hid in self.all_ids if hid < 100 and hid in tracked_masks]
+        if bool(getattr(self, "track_hand_masks", True)):
+            hand_masks_list = [tracked_masks[hid] for hid in self.all_ids if hid < 100 and hid in tracked_masks]
+        else:
+            hand_masks_list = list(current_hand_proxy_masks or [])
         split_parent_ids_frame: Set[int] = set()
         for oid in [i for i in self.all_ids if i >= 100]:
             mask = tracked_masks.get(oid)

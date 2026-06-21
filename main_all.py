@@ -18,8 +18,8 @@ from modules_hl2 import Hl2Manager
 
 
 ## check before execution
-# - sudo lsof -i :8000
-# - sudo kill -9 {}
+# sudo lsof -i :8000
+# sudo kill -9 {}
 
 
 ## Set HoloLens2 options ##

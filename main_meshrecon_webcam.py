@@ -10,25 +10,12 @@ import numpy as np
 from PIL import Image
 import torch
 
-try:
-    import select
-    import tty
-    import termios
-except ImportError:
-    select = None
-    tty = None
-    termios = None
-
-try:
-    import msvcrt
-except ImportError:
-    msvcrt = None
-
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from threading import Thread
 import gc
 
-from modules_hotrack import InteractiveHoTrackSegmentor
+from modules_console import enable_cbreak_stdin, read_key_nonblocking, restore_stdin_cbreak
+from modules_hotrack import build_interactive_hotrack_segmentor_from_env
 
 
 ## Webcam options ##
@@ -36,30 +23,6 @@ WEBCAM_INDEX = int(os.environ.get("UVR_WEBCAM_INDEX", "0"))  # /dev/videoN index
 WEBCAM_SOURCE_RGB = os.environ.get("UVR_WEBCAM_SOURCE_RGB", "0").strip().lower() not in {"0", "false", "no", "off"}
 cam_width = 1280
 cam_height = 720
-
-def setup_terminal_input():
-    if termios is None or tty is None:
-        return None, None
-    try:
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        tty.setcbreak(fd)
-        return fd, old_settings
-    except Exception:
-        return None, None
-
-
-def read_terminal_key():
-    if msvcrt is not None and msvcrt.kbhit():
-        return msvcrt.getwch()
-    if select is not None and sys.stdin.isatty():
-        dr, _, _ = select.select([sys.stdin], [], [], 0.01)
-        if dr:
-            return sys.stdin.read(1)
-    return None
-
-
-fd, old_settings = setup_terminal_input()
 
 # HTTP 서버 설정
 HTTP_PORT = 8000
@@ -115,7 +78,7 @@ def main():
     ###################### init models ######################
     # 웹캠은 color만 제공하므로 depth 기반 legacy HOSegmentor 대신 color-only HoTrack 경로만 사용
     print("\n[Init] Initializing InteractiveHoTrackSegmentor...")
-    hosegmentor = InteractiveHoTrackSegmentor(output_dir="output/hotrack_stage1")
+    hosegmentor = build_interactive_hotrack_segmentor_from_env()
     if flag_recon_mesh:
         from modules_mesh import MeshReconstructor
         print("\n[Init] Initializing MeshReconstructor...")
@@ -136,6 +99,7 @@ def main():
     frame_idx = 0
 
     print("\n[Init] Starting loop")
+    console_state = enable_cbreak_stdin()
     try:
         while True:
             ###################### receive input ######################
@@ -171,7 +135,7 @@ def main():
                 break
 
             # 스페이스바 입력 확인
-            term_key = read_terminal_key()
+            term_key = read_key_nonblocking(timeout=0.01)
             if term_key == ' ' or key == ord(' '):
                 print("\n[Mesh] Starting reconstruction...")
 
@@ -232,8 +196,7 @@ def main():
 
         cap.release()
         cv2.destroyAllWindows()
-        if termios is not None and fd is not None and old_settings is not None:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        restore_stdin_cbreak(console_state)
 
 
 if __name__ == '__main__':

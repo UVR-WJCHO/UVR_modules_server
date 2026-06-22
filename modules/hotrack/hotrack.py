@@ -462,6 +462,7 @@ class Hotrack:
         # matches an active tracked object. This is intended for fast track-only
         # operation; paper mode keeps the legacy per-frame prompt behavior.
         self.skip_existing_object_box_prompts: bool = False
+        self.skip_existing_object_box_prompts_for_split_candidates: bool = True
         self.existing_object_box_iou_skip_th: float = 0.25
         self.existing_object_box_cover_skip_th: float = 0.55
         
@@ -538,6 +539,7 @@ class Hotrack:
         # When True, `new_object_from_multicomponent` is emitted immediately
         # once detector-backed split evidence appears in the current frame.
         self.split_multicomponent_instant_new: bool = True
+        self.enable_detector_guided_single_component_split: bool = False
         self._pending_splits: Dict[int, Dict[str, Any]] = {}
         # Split candidates are tracked by newly created child IDs.
         self._pending_split_from_new: Dict[int, Dict[str, Any]] = {}
@@ -8242,16 +8244,54 @@ class Hotrack:
                             best_existing_iou >= float(self.existing_object_box_iou_skip_th)
                             or best_existing_cover >= float(self.existing_object_box_cover_skip_th)
                         ):
-                            reject_events.append({
-                                "kind": "object",
-                                "stage": "existing_track_box_gate",
-                                "reason": "matched_existing_track",
-                                "box": [int(v) for v in box],
-                                "matched_obj_id": int(best_existing_id) if best_existing_id is not None else None,
-                                "bbox_iou": float(best_existing_iou),
-                                "bbox_cover": float(best_existing_cover),
-                            })
-                            continue
+                            split_candidate_prompt = False
+                            if (
+                                not bool(getattr(self, "skip_existing_object_box_prompts_for_split_candidates", True))
+                                and best_existing_id is not None
+                                and len(list(target_boxes or [])) >= 2
+                            ):
+                                existing_box = object_boxes.get(int(best_existing_id))
+                                if isinstance(existing_box, (list, tuple)) and len(existing_box) == 4:
+                                    try:
+                                        ex1, ey1, ex2, ey2 = [int(v) for v in list(existing_box)[:4]]
+                                        same_existing_match_count = 0
+                                        for other_box in list(target_boxes or []):
+                                            if not isinstance(other_box, (list, tuple)) or len(other_box) != 4:
+                                                continue
+                                            obx1, oby1, obx2, oby2 = [int(v) for v in list(other_box)[:4]]
+                                            other_area_safe = float(max(1.0, max(0, obx2 - obx1) * max(0, oby2 - oby1)))
+                                            other_iou = float(bbox_iou([obx1, oby1, obx2, oby2], [ex1, ey1, ex2, ey2]))
+                                            oix1 = max(int(obx1), int(ex1))
+                                            oiy1 = max(int(oby1), int(ey1))
+                                            oix2 = min(int(obx2), int(ex2))
+                                            oiy2 = min(int(oby2), int(ey2))
+                                            other_inter = float(max(0, oix2 - oix1) * max(0, oiy2 - oiy1))
+                                            other_cover = float(other_inter / other_area_safe)
+                                            if (
+                                                other_iou >= float(self.existing_object_box_iou_skip_th)
+                                                or other_cover >= float(self.existing_object_box_cover_skip_th)
+                                            ):
+                                                same_existing_match_count += 1
+                                        split_candidate_prompt = bool(same_existing_match_count >= 2)
+                                    except Exception:
+                                        split_candidate_prompt = False
+                            if split_candidate_prompt:
+                                print(
+                                    f"[Hotrack] F{self.frame_idx} OBJ_PROMPT_FOR_SPLIT: "
+                                    f"det_box matched obj-{int(best_existing_id)-100 if best_existing_id is not None else -1} "
+                                    f"(iou={best_existing_iou:.2f}, cover={best_existing_cover:.2f})"
+                                )
+                            else:
+                                reject_events.append({
+                                    "kind": "object",
+                                    "stage": "existing_track_box_gate",
+                                    "reason": "matched_existing_track",
+                                    "box": [int(v) for v in box],
+                                    "matched_obj_id": int(best_existing_id) if best_existing_id is not None else None,
+                                    "bbox_iou": float(best_existing_iou),
+                                    "bbox_cover": float(best_existing_cover),
+                                })
+                                continue
                 box_np = np.array(box, dtype=np.float32)
                 temp_obj_id = self.next_obj_id
                 self.next_obj_id += 1
@@ -9354,6 +9394,128 @@ class Hotrack:
             mask_uint8 = mask.astype(np.uint8)
             num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask_uint8, connectivity=8)
             if num_labels <= 2:
+                single_component_split_applied = False
+                if bool(getattr(self, "enable_detector_guided_single_component_split", False)):
+                    split_signal_masks = _collect_split_signal_masks_current_frame()
+                    det_box_count = int(len(list(self._current_target_boxes or [])))
+                    if int(det_box_count) >= 2 and len(split_signal_masks) >= 2:
+                        parent_mask = mask.astype(bool)
+                        parent_area = int(np.count_nonzero(parent_mask))
+                        prev_mask_single = self._prev_tracked_masks.get(int(oid))
+                        if prev_mask_single is not None and prev_mask_single.shape != parent_mask.shape:
+                            prev_mask_single = cv2.resize(
+                                prev_mask_single.astype(np.uint8),
+                                (parent_mask.shape[1], parent_mask.shape[0]),
+                                interpolation=cv2.INTER_NEAREST,
+                            ).astype(bool)
+
+                        det_candidates: List[Dict[str, Any]] = []
+                        for det_idx, det_mask in enumerate(split_signal_masks):
+                            dm = _to_bool_mask(det_mask)
+                            if dm is None or np.count_nonzero(dm) < int(self.min_mask_area):
+                                continue
+                            dm = dm.astype(bool)
+                            _, ioa_parent_to_det, ioa_det_to_parent = calculate_ioa_bidirectional(parent_mask, dm)
+                            if ioa_det_to_parent < float(self.new_mask_inclusion_reject_ioa):
+                                continue
+                            if prev_mask_single is not None:
+                                overlap_prev = int(np.sum(np.logical_and(dm, prev_mask_single.astype(bool))))
+                            else:
+                                overlap_prev = 0
+                            det_candidates.append({
+                                "det_idx": int(det_idx),
+                                "mask": dm.copy(),
+                                "area": int(np.count_nonzero(dm)),
+                                "ioa_parent_to_det": float(ioa_parent_to_det),
+                                "ioa_det_to_parent": float(ioa_det_to_parent),
+                                "overlap_prev": int(overlap_prev),
+                            })
+
+                        best_pair: Optional[Tuple[Dict[str, Any], Dict[str, Any], float]] = None
+                        for a_idx, cand_a in enumerate(det_candidates):
+                            for cand_b in det_candidates[a_idx + 1:]:
+                                _, ioa_a_to_b, ioa_b_to_a = calculate_ioa_bidirectional(cand_a["mask"], cand_b["mask"])
+                                mutual = float(max(ioa_a_to_b, ioa_b_to_a))
+                                if mutual >= float(self.new_mask_reject_ioa):
+                                    continue
+                                coverage = float(
+                                    (
+                                        int(np.count_nonzero(np.logical_and(parent_mask, cand_a["mask"])))
+                                        + int(np.count_nonzero(np.logical_and(parent_mask, cand_b["mask"])))
+                                    )
+                                    / max(1, int(parent_area))
+                                )
+                                score = float(
+                                    min(
+                                        float(cand_a.get("ioa_det_to_parent", 0.0)),
+                                        float(cand_b.get("ioa_det_to_parent", 0.0)),
+                                    )
+                                    + 0.1 * coverage
+                                    - 0.1 * mutual
+                                )
+                                if best_pair is None or score > float(best_pair[2]):
+                                    best_pair = (cand_a, cand_b, float(score))
+
+                        if best_pair is not None:
+                            cand_a, cand_b, pair_score = best_pair
+                            keep_cand, split_cand = sorted(
+                                [cand_a, cand_b],
+                                key=lambda row: (int(row.get("overlap_prev", 0)), int(row.get("area", 0))),
+                                reverse=True,
+                            )
+                            keep_mask_det = _to_bool_mask(keep_cand.get("mask"))
+                            split_mask_det = _to_bool_mask(split_cand.get("mask"))
+                            if keep_mask_det is not None and split_mask_det is not None:
+                                split_child_mask = np.logical_and(split_mask_det.astype(bool), parent_mask)
+                                keep_child_mask = np.logical_and(keep_mask_det.astype(bool), parent_mask)
+                                keep_without_split = np.logical_and(
+                                    keep_child_mask.astype(bool),
+                                    np.logical_not(split_child_mask.astype(bool)),
+                                )
+                                if np.count_nonzero(keep_without_split) >= int(self.min_mask_area):
+                                    keep_child_mask = keep_without_split
+                                split_without_keep = np.logical_and(
+                                    split_child_mask.astype(bool),
+                                    np.logical_not(keep_child_mask.astype(bool)),
+                                )
+                                if np.count_nonzero(split_without_keep) >= int(self.min_mask_area):
+                                    split_child_mask = split_without_keep
+                                if (
+                                    np.count_nonzero(keep_child_mask) >= int(self.min_mask_area)
+                                    and np.count_nonzero(split_child_mask) >= int(self.min_mask_area)
+                                ):
+                                    split_ev = self._apply_keep_and_new_transaction(
+                                        parent_id=int(oid),
+                                        keep_mask=keep_child_mask,
+                                        new_mask=split_child_mask,
+                                        reason="detector_guided_single_component_split",
+                                        score=float(pair_score),
+                                        frame_idx=int(self.frame_idx),
+                                        tracked_masks=tracked_masks,
+                                        tracked_boxes=tracked_boxes,
+                                        object_masks=object_masks,
+                                        object_boxes=object_boxes,
+                                        new_objects=new_objects,
+                                        new_obj_meta={
+                                            "source": "detector_guided_split",
+                                            "det_box_count": int(det_box_count),
+                                            "split_det_idx": int(split_cand.get("det_idx", -1)),
+                                            "keep_det_idx": int(keep_cand.get("det_idx", -1)),
+                                        },
+                                        emit_struct_split=False,
+                                    )
+                                    if split_ev is not None:
+                                        print(
+                                            f"[Hotrack] F{self.frame_idx} OBJ_SPLIT_DET_GUIDED: "
+                                            f"obj-{int(oid)-100} new=obj-{int(split_ev.get('child', -1))-100} "
+                                            f"det_pair=({int(keep_cand.get('det_idx', -1))},"
+                                            f"{int(split_cand.get('det_idx', -1))}) score={float(pair_score):.2f}"
+                                        )
+                                        split_parent_ids_frame.add(int(oid))
+                                        self._pending_splits.pop(int(oid), None)
+                                        single_component_split_applied = True
+                if single_component_split_applied:
+                    continue
                 self._pending_splits.pop(oid, None)
                 continue
 

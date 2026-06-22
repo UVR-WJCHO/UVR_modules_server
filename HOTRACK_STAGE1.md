@@ -1,6 +1,6 @@
 # Interactive HoTrack Stage 1
 
-This branch wires the hograph_plus Hotrack track-only flow into the existing `main_all.py` entry point.
+This branch wires the hograph_plus Hotrack track-only flow into the existing `main_meshrecon.py` and `main_meshrecon_webcam.py` entry points.
 
 ## What It Does
 
@@ -17,21 +17,23 @@ It intentionally disables hograph/graph execution and sanitizes structural merge
 Place the hograph_plus YOLO checkpoint and a SAM2.1 checkpoint in ignored local paths:
 
 ```bash
-mkdir -p weights segmentor/sam2_realtime/checkpoints
-# weights/yolo_100doh_best.pt
-# segmentor/sam2_realtime/checkpoints/sam2.1_hiera_tiny.pt
+mkdir -p pretrained/object modules/segmentor/sam2_realtime/checkpoints
+# pretrained/object/yolo_100doh_best.pt
+# modules/segmentor/sam2_realtime/checkpoints/sam2.1_hiera_tiny.pt
 ```
 
 Then run the existing entry point:
 
 ```bash
-python main_all.py
+python main_meshrecon.py
+# or
+python main_meshrecon_webcam.py
 ```
 
 The interactive stage-1 path is enabled by default. To use the previous segmentor:
 
 ```bash
-UVR_USE_INTERACTIVE_HOTRACK=0 python main_all.py
+UVR_USE_INTERACTIVE_HOTRACK=0 python main_meshrecon.py
 ```
 
 ## Controls
@@ -68,7 +70,7 @@ Masks are saved as single-channel PNG files for object ids (`>=100`). The tracki
 
 - `UVR_HOTRACK_OUTPUT_DIR`: base output directory, default `output/hotrack_stage1`.
 - `UVR_HOTRACK_VIDEO_NAME`: run name, default `hl2_online`.
-- `UVR_HOTRACK_YOLO_MODEL`: hograph_plus HO detector checkpoint, default `weights/yolo_100doh_best.pt`.
+- `UVR_HOTRACK_YOLO_MODEL`: hograph_plus HO detector checkpoint, default `pretrained/object/yolo_100doh_best.pt`.
 - `UVR_HOTRACK_SAM2_VARIANT`: `tiny`, `small`, `base_plus`, or `large`; default `tiny`.
 - `UVR_HOTRACK_SAM2_CHECKPOINT`: explicit SAM2 checkpoint path.
 - `UVR_HOTRACK_MAX_SIDE`: optional resize long side before Hotrack/SAM2, default `0` (disabled, hograph_plus-compatible).

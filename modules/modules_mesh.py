@@ -1,6 +1,6 @@
 import os
-os.environ['ATTN_BACKEND'] = 'flash-attn'   # Can be 'flash-attn' or 'xformers', default is 'flash-attn'
-os.environ['SPCONV_ALGO'] = 'native'        # Can be 'native' or 'auto', default is 'auto'.
+os.environ.setdefault('ATTN_BACKEND', 'xformers')  # Can be 'flash-attn' or 'xformers'.
+os.environ.setdefault('SPCONV_ALGO', 'native')     # Can be 'native' or 'auto', default is 'auto'.
                                             # 'auto' is faster but will do benchmarking at the beginning.
                                             # Recommended to set to 'native' if run only once.
 import cv2
@@ -17,6 +17,14 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 class MeshReconstructor():
     def __init__(self, modelpath='pretrained/meshrecon/diffusion'):
+        if modelpath.startswith(("pretrained/", "./", "../", "/")):
+            config_path = os.path.join(modelpath, "pipeline.json")
+            if not os.path.exists(config_path):
+                raise FileNotFoundError(
+                    f"Mesh reconstruction weights not found: {config_path}. "
+                    "Place the files listed in WEIGHTS.md under pretrained/meshrecon/."
+                )
+
         # Load a pipeline from a model folder or a Hugging Face model hub.
         self.pipeline = TrellisImageTo3DPipeline.from_pretrained(modelpath)
         self.pipeline.cuda()
@@ -79,8 +87,6 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
 
 
 

@@ -8,7 +8,16 @@
 
 import torch
 from .tables import *
-from kaolin.utils.testing import check_tensor
+try:
+    from kaolin.utils.testing import check_tensor
+except ModuleNotFoundError:
+    def check_tensor(tensor, shape, throw=True):
+        ok = torch.is_tensor(tensor) and tensor.dim() == len(shape)
+        if ok:
+            ok = all(expected is None or actual == expected for actual, expected in zip(tensor.shape, shape))
+        if throw and not ok:
+            raise ValueError(f"Expected tensor shape {shape}, got {getattr(tensor, 'shape', None)}")
+        return ok
 
 __all__ = [
     'FlexiCubes'

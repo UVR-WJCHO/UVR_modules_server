@@ -29,7 +29,7 @@ from modules_behavior import BehaviorPropertyEstimator
 
 
 ## Set HoloLens2 options ##
-host = '192.168.50.137'  # HoloLens2 wifi address
+host = os.environ.get('UVR_HL2_HOST', '192.168.50.137')  # HoloLens2 wifi address
 
 pv_width = 1280
 pv_height = 720
@@ -42,7 +42,7 @@ tty.setcbreak(fd)
 # HTTP 서버 설정
 HTTP_PORT = 8000
 
-flag_recon_mesh = True
+flag_recon_mesh = False
 flag_interactive_hotrack = True
 flag_behavior = False  # run behavior property estimation (GLB -> property JSON) after each mesh
 
@@ -98,8 +98,8 @@ def main():
     else:
         print("\n[Init] Initializing legacy HOSegmentor...")
         hosegmentor = HOSegmentor()
-    print("\n[Init] Initializing MeshReconstructor...")
     if flag_recon_mesh:
+        print("\n[Init] Initializing MeshReconstructor...")
         meshrecon = MeshReconstructor()
     if flag_behavior:
         print("\n[Init] Initializing BehaviorPropertyEstimator...")

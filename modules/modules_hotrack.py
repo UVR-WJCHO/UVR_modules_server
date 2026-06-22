@@ -177,7 +177,7 @@ class InteractiveHoTrackSegmentor:
         if not ckpt_path.exists():
             raise FileNotFoundError(
                 f"SAM2 checkpoint not found: {ckpt_path}. "
-                "Set UVR_HOTRACK_SAM2_CHECKPOINT, place the file under segmentor/sam2_realtime/checkpoints/, or set HOGRAPH_PLUS_ROOT."
+                "Set UVR_HOTRACK_SAM2_CHECKPOINT, place the file under modules/segmentor/sam2_realtime/checkpoints/, or set HOGRAPH_PLUS_ROOT."
             )
 
         self.hotrack = Hotrack(
@@ -217,7 +217,7 @@ class InteractiveHoTrackSegmentor:
         if key not in CONFIGS:
             raise ValueError(f"Unknown SAM2 variant '{variant}'. Choose one of {sorted(CONFIGS)}")
         cfg, ckpt_name = CONFIGS[key]
-        ckpt_path = Path(checkpoint).expanduser() if checkpoint else _REPO_ROOT / "segmentor" / "sam2_realtime" / "checkpoints" / ckpt_name
+        ckpt_path = Path(checkpoint).expanduser() if checkpoint else _REPO_ROOT / "modules" / "segmentor" / "sam2_realtime" / "checkpoints" / ckpt_name
         if not ckpt_path.is_absolute():
             ckpt_path = _REPO_ROOT / ckpt_path
         return cfg, str(ckpt_path)

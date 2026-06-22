@@ -103,7 +103,7 @@ class InteractiveHoTrackSegmentor:
         self,
         output_dir: str = "output/hotrack_stage1",
         video_name: str = "hl2_online",
-        yolo_model_path: str = "weights/yolo_100doh_best.pt",
+        yolo_model_path: str = "pretrained/object/yolo_100doh_best.pt",
         sam2_variant: str = "tiny",
         sam2_checkpoint: str = "",
         image_dir: str = ".",
@@ -166,7 +166,7 @@ class InteractiveHoTrackSegmentor:
         if not yolo_path.exists():
             raise FileNotFoundError(
                 f"HoTrack YOLO checkpoint not found: {yolo_path}. "
-                "Use weights/yolo_100doh_best.pt, set UVR_HOTRACK_YOLO_MODEL, or set HOGRAPH_PLUS_ROOT."
+                "Use pretrained/object/yolo_100doh_best.pt, set UVR_HOTRACK_YOLO_MODEL, or set HOGRAPH_PLUS_ROOT."
             )
 
         ckpt_path = Path(default_ckpt)

@@ -42,9 +42,9 @@ tty.setcbreak(fd)
 # HTTP 서버 설정
 HTTP_PORT = 8000
 
-flag_skip_mesh = False
-flag_interactive_hotrack = False #os.getenv("UVR_USE_INTERACTIVE_HOTRACK", "1") != "0"
-flag_behavior = True  # run behavior property estimation (GLB -> property JSON) after each mesh
+flag_recon_mesh = True
+flag_interactive_hotrack = True
+flag_behavior = False  # run behavior property estimation (GLB -> property JSON) after each mesh
 
 
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -99,7 +99,7 @@ def main():
         print("\n[Init] Initializing legacy HOSegmentor...")
         hosegmentor = HOSegmentor()
     print("\n[Init] Initializing MeshReconstructor...")
-    if not flag_skip_mesh:
+    if flag_recon_mesh:
         meshrecon = MeshReconstructor()
     if flag_behavior:
         print("\n[Init] Initializing BehaviorPropertyEstimator...")
@@ -184,7 +184,7 @@ def main():
                     np.save(os.path.join(capture_dir, "intrinsic.npy"), intrinsic_per_frame)
                     print("intrinsic : ", intrinsic_per_frame)
 
-                    if not flag_skip_mesh:
+                    if flag_recon_mesh:
                         try:
                             mesh_glb = meshrecon.run(masked_color_pil)
 
@@ -231,7 +231,7 @@ def main():
         print("\n[Info] Shutting down...")
 
     finally:
-        if not flag_skip_mesh:
+        if flag_recon_mesh:
             del meshrecon
         if hasattr(hosegmentor, "close"):
             hosegmentor.close()

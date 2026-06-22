@@ -11,9 +11,9 @@ class ObjTracker:
     def __init__(self, det_cooltime=10):
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-        curr_dir = os.path.dirname(os.path.abspath(__file__))
-        # Assuming 'pretrain/yolo11m.pt' is available in the project structure
-        YOLO_obj_path = os.path.join(curr_dir, 'pretrain', 'yolo11m.pt')
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Assuming 'pretrained/object/yolo11m.pt' is available in the project structure
+        YOLO_obj_path = os.path.join(repo_root, 'pretrained', 'object', 'yolo11m.pt')
         self.detector_obj = YOLO(YOLO_obj_path)
         self.detector_obj.to(self.device)
 

@@ -1,4 +1,8 @@
 import os, sys
+
+# Make packages under modules/ importable as top-level (meshrecon, segmentor, hotrack, ...)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "modules"))
+
 import time
 import cv2
 import numpy as np
@@ -37,7 +41,7 @@ tty.setcbreak(fd)
 HTTP_PORT = 8000
 
 flag_skip_mesh = False
-flag_interactive_hotrack = os.getenv("UVR_USE_INTERACTIVE_HOTRACK", "1") != "0"
+flag_interactive_hotrack = False #os.getenv("UVR_USE_INTERACTIVE_HOTRACK", "1") != "0"
 
 
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -86,28 +90,7 @@ def main():
     ###################### init models ######################
     if flag_interactive_hotrack:
         print("\n[Init] Initializing InteractiveHoTrackSegmentor...")
-        hosegmentor = InteractiveHoTrackSegmentor(
-            output_dir=os.getenv("UVR_HOTRACK_OUTPUT_DIR", "output/hotrack_stage1"),
-            video_name=os.getenv("UVR_HOTRACK_VIDEO_NAME", "hl2_online"),
-            yolo_model_path=os.getenv("UVR_HOTRACK_YOLO_MODEL", "weights/yolo_100doh_best.pt"),
-            sam2_variant=os.getenv("UVR_HOTRACK_SAM2_VARIANT", "tiny"),
-            sam2_checkpoint=os.getenv("UVR_HOTRACK_SAM2_CHECKPOINT", ""),
-            max_side=int(os.getenv("UVR_HOTRACK_MAX_SIDE", "0")),
-            ho_thresh_hand=float(os.getenv("UVR_HOTRACK_HO_THRESH_HAND", "0.55")),
-            ho_thresh_obj=float(os.getenv("UVR_HOTRACK_HO_THRESH_OBJ", "0.55")),
-            iou_threshold=float(os.getenv("UVR_HOTRACK_IOU_THRESHOLD", "0.5")),
-            target_contact_code=os.getenv("UVR_HOTRACK_TARGET_CONTACT", "P"),
-            backfill_window=int(os.getenv("UVR_HOTRACK_BACKFILL_WINDOW", "120")),
-            save_masks=os.getenv("UVR_HOTRACK_SAVE_MASKS", "1") != "0",
-            save_tracking_json=os.getenv("UVR_HOTRACK_SAVE_TRACKING_JSON", "1") != "0",
-            interactive_window=os.getenv("UVR_HOTRACK_WINDOW", "1") != "0",
-            sam2_amp=os.getenv("UVR_HOTRACK_SAM2_AMP", "1") != "0",
-            sam2_amp_dtype=os.getenv("UVR_HOTRACK_SAM2_AMP_DTYPE", "bfloat16"),
-            use_dino_id=os.getenv("UVR_HOTRACK_USE_DINO_ID", "1") != "0",
-            enable_id_recovery=os.getenv("UVR_HOTRACK_ENABLE_ID_RECOVERY", "1") != "0",
-            compute_dino_similarity=os.getenv("UVR_HOTRACK_COMPUTE_DINO_SIMILARITY", "0") == "1",
-            dino_allow_download=os.getenv("UVR_HOTRACK_DINO_ALLOW_DOWNLOAD", "0") == "1",
-        )
+        hosegmentor = InteractiveHoTrackSegmentor(output_dir="output/hotrack_stage1")
     else:
         print("\n[Init] Initializing legacy HOSegmentor...")
         hosegmentor = HOSegmentor()
@@ -147,39 +130,30 @@ def main():
             if flag_interactive_hotrack:
                 with torch.inference_mode():
                     h_color_image, result_masks, _ = hosegmentor.process_frame(color.copy())
-                    key = cv2.waitKey(1)
-                    hosegmentor.handle_key(key)
-                    frame_idx += 1
-                    if hosegmentor.quit_requested:
-                        break
-                    if len(result_masks) == 0:
-                        continue
-                    obj_mask = result_masks[0]
-                    masked_color = np.where(obj_mask[..., None] == 1, color, 3)
-                    cv2.imshow("Segmentation", masked_color)
-                    key = cv2.waitKey(1)
-                    hosegmentor.handle_key(key)
+                    hosegmentor.handle_key(cv2.waitKey(1))
                     if hosegmentor.quit_requested:
                         break
             else:
                 with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                     depth_cm = depth * 10.0
                     hotrack_datas = hosegmentor.get_hotrack_datas(color, depth_cm)
-
                     h_color_image, result_masks = hosegmentor.run(color.copy(), depth_cm, hotrack_datas,
                                                                   is_first_call,
                                                                   frame_idx)
                     is_first_call = False
-                    frame_idx += 1
+            frame_idx += 1
 
-                    if len(result_masks) == 0:
-                        continue
+            if len(result_masks) == 0:
+                continue
 
-                    obj_mask = result_masks[0]
-
-                    masked_color = np.where(obj_mask[..., None] == 1, color, 3)
-                    cv2.imshow("Segmentation", masked_color)
-                    cv2.waitKey(1)
+            obj_mask = result_masks[0]
+            masked_color = np.where(obj_mask[..., None] == 1, color, 3)
+            cv2.imshow("Segmentation", masked_color)
+            key = cv2.waitKey(1)
+            if flag_interactive_hotrack:
+                hosegmentor.handle_key(key)
+                if hosegmentor.quit_requested:
+                    break
 
             # 스페이스바 입력 확인
             dr, dw, de = select.select([sys.stdin], [], [], 0.01)

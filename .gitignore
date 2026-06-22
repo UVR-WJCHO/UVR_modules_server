@@ -1,12 +1,14 @@
 __pycache__
 
-calibration/rm_depth_ahat/*
+_calibration/rm_depth_ahat/*
 output/*
-pretrain/*
+pretrained/*
 
-handtracker/checkpoint/*
-handtracker_wilor/pretrained_models/*
+modules/handtracker/checkpoint/*
+modules/handtracker_wilor/pretrained_models/*
 
-segmentor/sam2_realtime/checkpoints/*
+modules/segmentor/sam2_realtime/checkpoints/*
+modules/segmentor/100DOH_small.pt
 
-weights/*
+modules/gestureclassifier/checkpoints/*
+modules/handtracker_wilor/mano_data/*

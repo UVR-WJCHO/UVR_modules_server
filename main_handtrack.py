@@ -7,6 +7,9 @@ import struct
 import socket
 import keyboard
 
+# Make packages under modules/ importable as top-level (handtracker, meshrecon, ...)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "modules"))
+
 # Import refactored modules
 from modules_hand import HandTracker_our, HandTracker_our_wilor
 from modules_gesture import GestureClassfier
@@ -56,7 +59,7 @@ def main():
         flag_hand_model = True  # Start with v2
 
         track_gesture = GestureClassfier(
-            ckpt=f"./gestureclassifier/checkpoints/{CKPT_FILE}",
+            ckpt=f"./modules/gestureclassifier/checkpoints/{CKPT_FILE}",
             seq_len=SEQ_LEN,
             model_opt=1
         )
@@ -103,7 +106,7 @@ def main():
             result = hl2_manager.receive_images(flag_depth)
             if result is None:
                 continue
-            color, depth = result
+            color, depth, _ = result
 
             # Display RGBD pair
             cv2.imshow('RGB', color)
@@ -210,7 +213,7 @@ def main():
     finally:
         print("Cleaning up resources...")
         sock.close()
-        hl2_manager.destory()
+        hl2_manager.destroy()
         cv2.destroyAllWindows()
 
 

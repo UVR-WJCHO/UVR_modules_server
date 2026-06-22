@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class MeshReconstructor():
-    def __init__(self, modelpath='pretrain/diffusion'):
+    def __init__(self, modelpath='pretrained/meshrecon/diffusion'):
         # Load a pipeline from a model folder or a Hugging Face model hub.
         self.pipeline = TrellisImageTo3DPipeline.from_pretrained(modelpath)
         self.pipeline.cuda()
@@ -49,7 +49,7 @@ class MeshReconstructor():
 def main():
     import time
     savepath = './outputs'
-    modelpath = 'pretrain/diffusion'
+    modelpath = 'pretrained/meshrecon/diffusion'
     condpath = './examples/part0_1.jpg'
     savepath = os.path.join(savepath, condpath.split('/')[-1].split('.')[0])
 

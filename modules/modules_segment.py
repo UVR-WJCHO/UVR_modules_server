@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 import mediapipe as mp
 import torch
 
-sys.path.append('./segmentor')
+sys.path.append('./modules/segmentor')
 from sam2_realtime.sam2.build_sam import build_sam2_realtime_predictor
 import time
 import ultralytics
@@ -30,11 +30,11 @@ class HOSegmentor():
             torch.backends.cudnn.allow_tf32 = True
 
         # SAM2.1 초기화
-        checkpoint = "./segmentor/sam2_realtime/checkpoints/sam2.1_hiera_large.pt"
+        checkpoint = "./modules/segmentor/sam2_realtime/checkpoints/sam2.1_hiera_large.pt"
         model_cfg = "./configs/sam2.1/sam2.1_hiera_l.yaml"
         self.tracker = build_sam2_realtime_predictor(model_cfg, checkpoint, device=self.device)
 
-        self.yolo_hand_model = ultralytics.YOLO("./segmentor/100DOH_small.pt", verbose=False)
+        self.yolo_hand_model = ultralytics.YOLO("./modules/segmentor/100DOH_small.pt", verbose=False)
 
         self.all_masks = None
         self.all_ids = []
@@ -359,8 +359,8 @@ class HOSegmentor():
 
 
 def main():
-    rgb_path = "./segmentor/metaobj_modeling_example_2/01_rgb"
-    depth_path = "./segmentor/metaobj_modeling_example_2/04_pred_depth"
+    rgb_path = "./modules/segmentor/metaobj_modeling_example_2/01_rgb"
+    depth_path = "./modules/segmentor/metaobj_modeling_example_2/04_pred_depth"
     rgb_files = sorted(glob.glob(os.path.join(rgb_path, "frame_*.png")))
     depth_files = sorted(glob.glob(os.path.join(depth_path, "frame_*.png")))
 

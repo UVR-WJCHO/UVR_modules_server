@@ -1,7 +1,5 @@
 # UVR Modules Server
 
-This branch adds the online interactive HoTrack stage-1 tracker to the existing `main_all.py` flow.
-
 ## Main Entry Point
 
 ```bash

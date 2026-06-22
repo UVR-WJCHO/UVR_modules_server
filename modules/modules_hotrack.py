@@ -7,11 +7,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
-_REPO_ROOT = Path(__file__).resolve().parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tracking.hotrack import Hotrack  # noqa: E402
+from hotrack.hotrack import Hotrack  # noqa: E402
 
 
 CONFIGS = {

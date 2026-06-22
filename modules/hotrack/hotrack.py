@@ -14,10 +14,10 @@ import cv2
 import numpy as np
 import torch
 
-HOTRACKER_PATH = "segmentor/sam2_realtime"
-SAM2_PACKAGE_ROOT = "segmentor"
+HOTRACKER_PATH = "modules/segmentor/sam2_realtime"
+SAM2_PACKAGE_ROOT = "modules/segmentor"
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SAM2_ROOT = os.path.join(PROJECT_ROOT, HOTRACKER_PATH)
 SAM2_IMPORT_ROOT = os.path.join(PROJECT_ROOT, SAM2_PACKAGE_ROOT)
 
@@ -57,13 +57,13 @@ for p in [SAM2_IMPORT_ROOT, SAM2_ROOT, PROJECT_ROOT]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from tracking.detector import build_detector, detect_image_bgr
+from hotrack.detector import build_detector, detect_image_bgr
 
 # SAM2 모듈 import
 from sam2_realtime.sam2.build_sam import build_sam2_realtime_predictor, build_sam2_video_predictor
 
 # Utils 모듈 import
-from core.utils import (
+from hotrack.utils import (
     visualize_segmentation,
     calculate_iou,
     calculate_ioa_bidirectional,
@@ -72,7 +72,7 @@ from core.utils import (
     get_image_paths,
     overlay_motion_debug,
 )
-from core.tuning import MetaTuningAxes, derive_hotrack_params
+from hotrack.tuning import MetaTuningAxes, derive_hotrack_params
 
 
 _SAM2_TIMED_METHODS = {

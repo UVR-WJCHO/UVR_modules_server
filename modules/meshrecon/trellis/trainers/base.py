@@ -94,7 +94,7 @@ class Trainer:
         assert self.batch_size_per_gpu % self.batch_split == 0, 'Batch size per GPU must be divisible by batch split.'
 
         if onlyphy_property:
-            self.models['decoder'].load_state_dict(load_file('./pretrain/trellis/ckpts/slat_dec_mesh_swin8_B_64l8m256c_fp16.safetensors'), strict=False)
+            self.models['decoder'].load_state_dict(load_file('./pretrained/meshrecon/trellis/ckpts/slat_dec_mesh_swin8_B_64l8m256c_fp16.safetensors'), strict=False)
             for name, param in self.models['decoder'].named_parameters():
                 if 'out_layer' in name and 'out_layers' not in name:
                     param.requires_grad = True
@@ -102,7 +102,7 @@ class Trainer:
                 else:
                     param.requires_grad = False
         if onlyphy_property_gen:
-            self.models['denoiser'].load_state_dict(load_file('./pretrain/trellis/ckpts/slat_flow_img_dit_L_64l8p2_fp16.safetensors'), strict=False)
+            self.models['denoiser'].load_state_dict(load_file('./pretrained/meshrecon/trellis/ckpts/slat_flow_img_dit_L_64l8p2_fp16.safetensors'), strict=False)
             for name, param in self.models['denoiser'].named_parameters():
                 if 'out_layer' in name:
                     param.requires_grad = True

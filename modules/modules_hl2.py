@@ -1,6 +1,6 @@
 import os, sys
 
-sys.path.append("./hl2ss_")
+sys.path.append("./_hl2ss")
 import hl2ss
 import hl2ss_lnm
 import hl2ss_mp
@@ -11,7 +11,7 @@ import numpy as np
 
 
 # Calibration path (must exist but can be empty)
-CALIBRATION_PATH = 'calibration'
+CALIBRATION_PATH = '_calibration'
 if not os.path.isdir(CALIBRATION_PATH):
     os.mkdir(CALIBRATION_PATH)
 

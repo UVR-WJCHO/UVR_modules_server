@@ -29,4 +29,4 @@ class MANO(object):
         self.joint_regressor = self.joint_regressor[[0, 13, 14, 15, 16, 1, 2, 3, 17, 4, 5, 6, 18, 10, 11, 12, 19, 7, 8, 9, 20],:]
 
     def get_layer(self):
-        return ManoLayer(mano_root='handtracker/mano_data/mano/models', flat_hand_mean=False, use_pca=False) # load right hand MANO model
+        return ManoLayer(mano_root='modules/handtracker/mano_data/mano/models', flat_hand_mean=False, use_pca=False) # load right hand MANO model

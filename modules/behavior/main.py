@@ -1,5 +1,26 @@
 import os
 import argparse
+
+
+def _load_dotenv(path):
+    """Load KEY=VALUE lines from a .env file into os.environ (existing vars win)."""
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip().strip('"').strip("'")
+            if key and value and key not in os.environ:
+                os.environ[key] = value
+
+
+# Load the repo-root .env BEFORE importing query_vlm, because vlm_utils reads
+# OPENAI_API_KEY at import time. Lets standalone runs pick up the key.
+_load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".env"))
+
 from utils.preprocess_glb_for_vlm import create_vlm_dataset_from_glb
 from utils.query_vlm import query_vlm
 from utils.visualize import visualize_results

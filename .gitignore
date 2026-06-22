@@ -1,5 +1,7 @@
 __pycache__
 
+.env
+
 _calibration/rm_depth_ahat/*
 output/*
 pretrained/*
@@ -12,3 +14,6 @@ modules/segmentor/100DOH_small.pt
 
 modules/gestureclassifier/checkpoints/*
 modules/handtracker_wilor/mano_data/*
+
+modules/behavior/vlm_input/
+modules/behavior/data/

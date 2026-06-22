@@ -4,6 +4,7 @@ import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "modules"))
 
 import time
+import datetime
 import cv2
 import numpy as np
 from PIL import Image
@@ -19,6 +20,7 @@ from modules_mesh import MeshReconstructor
 from modules_segment import HOSegmentor
 from modules_hotrack import InteractiveHoTrackSegmentor
 from modules_hl2 import Hl2Manager
+from modules_behavior import BehaviorPropertyEstimator
 
 
 ## check before execution
@@ -42,6 +44,7 @@ HTTP_PORT = 8000
 
 flag_skip_mesh = False
 flag_interactive_hotrack = False #os.getenv("UVR_USE_INTERACTIVE_HOTRACK", "1") != "0"
+flag_behavior = True  # run behavior property estimation (GLB -> property JSON) after each mesh
 
 
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -81,6 +84,7 @@ def print_gpu_memory():
 
 def main():
     clear_gpu_memory()
+    os.makedirs("output", exist_ok=True)
 
     ###################### HTTP 서버 시작 ######################
     http_thread = Thread(target=start_http_server, daemon=True)
@@ -97,6 +101,9 @@ def main():
     print("\n[Init] Initializing MeshReconstructor...")
     if not flag_skip_mesh:
         meshrecon = MeshReconstructor()
+    if flag_behavior:
+        print("\n[Init] Initializing BehaviorPropertyEstimator...")
+        behavior_estimator = BehaviorPropertyEstimator()
 
     ###################### init hl2 ######################
     print("\n[Init] Initializing Hl2Manager...")
@@ -162,22 +169,26 @@ def main():
                 if key == ' ':
                     print("\n[Mesh] Starting reconstruction...")
 
+                    # 캡처마다 현재 시간으로 하위 폴더를 만들어 모든 결과물을 그 안에 저장
+                    capture_dir = os.path.join("output", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+                    os.makedirs(capture_dir, exist_ok=True)
+
                     masked_color_pil = Image.fromarray(masked_color)
 
-                    cv2.imwrite((f"./rgb_{obj_idx}.png"), color)
-                    cv2.imwrite((f"./rgb_masked_{obj_idx}.png"), masked_color)
-                    np.save(f"./depth_{obj_idx}.npy", depth)
+                    cv2.imwrite(os.path.join(capture_dir, "rgb.png"), color)
+                    cv2.imwrite(os.path.join(capture_dir, "rgb_masked.png"), masked_color)
+                    np.save(os.path.join(capture_dir, "depth.npy"), depth)
                     print("save images")
 
                     # save auto adjusted intrinsic per frame
-                    np.save(f"./intrinsic_{obj_idx}.npy", intrinsic_per_frame)
+                    np.save(os.path.join(capture_dir, "intrinsic.npy"), intrinsic_per_frame)
                     print("intrinsic : ", intrinsic_per_frame)
 
                     if not flag_skip_mesh:
                         try:
                             mesh_glb = meshrecon.run(masked_color_pil)
 
-                            output_path = f"./mesh_{obj_idx}.glb"
+                            output_path = os.path.join(capture_dir, "mesh.glb")
                             mesh_glb.export(output_path)
                             print(f"[Mesh] Saved to {output_path}")
 
@@ -188,6 +199,18 @@ def main():
 
                             # local_ip = sock_check.gethostbyname(sock_check.gethostname())
                             # print(f"[Info] GLB available at http://{local_ip}:{HTTP_PORT}/output.glb")
+
+                            if flag_behavior:
+                                try:
+                                    print("\n[Behavior] Estimating properties from GLB...")
+                                    json_path = behavior_estimator.run(
+                                        output_path,
+                                        output_json=os.path.join(capture_dir, "property.json"),
+                                        vlm_input_dir=capture_dir,
+                                    )
+                                    print(f"[Behavior] Property JSON saved to {json_path}")
+                                except Exception as e:
+                                    print(f"[Error] Behavior estimation failed: {e}")
 
                         except Exception as e:
                             print(f"[Error] Mesh reconstruction failed: {e}")

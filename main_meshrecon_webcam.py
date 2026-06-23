@@ -9,30 +9,25 @@ import cv2
 import numpy as np
 from PIL import Image
 import torch
-import select, tty, termios
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from threading import Thread
 import gc
 
-from modules_mesh import MeshReconstructor
-from modules_hotrack import InteractiveHoTrackSegmentor
-from modules_behavior import BehaviorPropertyEstimator
+from modules_console import enable_cbreak_stdin, read_key_nonblocking, restore_stdin_cbreak
+from modules_hotrack import build_interactive_hotrack_segmentor_from_env
 
 
 ## Webcam options ##
-WEBCAM_INDEX = 0          # /dev/videoN index
+WEBCAM_INDEX = int(os.environ.get("UVR_WEBCAM_INDEX", "0"))  # /dev/videoN index
+WEBCAM_SOURCE_RGB = os.environ.get("UVR_WEBCAM_SOURCE_RGB", "0").strip().lower() not in {"0", "false", "no", "off"}
 cam_width = 1280
 cam_height = 720
-
-fd = sys.stdin.fileno()
-old_settings = termios.tcgetattr(fd)
-tty.setcbreak(fd)
 
 # HTTP 서버 설정
 HTTP_PORT = 8000
 
-flag_recon_mesh = True
+flag_recon_mesh = False
 flag_behavior = False  # run behavior property estimation (GLB -> property JSON) after each mesh
 
 
@@ -83,11 +78,13 @@ def main():
     ###################### init models ######################
     # 웹캠은 color만 제공하므로 depth 기반 legacy HOSegmentor 대신 color-only HoTrack 경로만 사용
     print("\n[Init] Initializing InteractiveHoTrackSegmentor...")
-    hosegmentor = InteractiveHoTrackSegmentor(output_dir="output/hotrack_stage1")
-    print("\n[Init] Initializing MeshReconstructor...")
+    hosegmentor = build_interactive_hotrack_segmentor_from_env()
     if flag_recon_mesh:
+        from modules_mesh import MeshReconstructor
+        print("\n[Init] Initializing MeshReconstructor...")
         meshrecon = MeshReconstructor()
     if flag_behavior:
+        from modules_behavior import BehaviorPropertyEstimator
         print("\n[Init] Initializing BehaviorPropertyEstimator...")
         behavior_estimator = BehaviorPropertyEstimator()
 
@@ -102,18 +99,17 @@ def main():
     frame_idx = 0
 
     print("\n[Init] Starting loop")
+    console_state = enable_cbreak_stdin()
     try:
         while True:
             ###################### receive input ######################
-            ret, frame = cap.read()
+            ret, frame_raw = cap.read()
             if not ret:
                 print("no frame")
                 continue
+            frame_bgr = cv2.cvtColor(frame_raw, cv2.COLOR_RGB2BGR) if WEBCAM_SOURCE_RGB else frame_raw
 
-            # OpenCV는 BGR로 읽으므로 HL2(RGB) 파이프라인과 동일하게 RGB로 변환
-            color = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-            cv2.imshow('RGB', color)
+            cv2.imshow('Webcam', frame_bgr)
             rgb_key = cv2.waitKey(1)
             hosegmentor.handle_key(rgb_key)
             if hosegmentor.quit_requested:
@@ -121,7 +117,7 @@ def main():
 
             ###################### process ######################
             with torch.inference_mode():
-                h_color_image, result_masks, _ = hosegmentor.process_frame(color.copy())
+                h_color_image, result_masks, _ = hosegmentor.process_frame(frame_bgr.copy())
                 hosegmentor.handle_key(cv2.waitKey(1))
                 if hosegmentor.quit_requested:
                     break
@@ -131,61 +127,61 @@ def main():
                 continue
 
             obj_mask = result_masks[0]
-            masked_color = np.where(obj_mask[..., None] == 1, color, 3)
-            cv2.imshow("Segmentation", masked_color)
+            masked_color_bgr = np.where(obj_mask[..., None] == 1, frame_bgr, 3).astype(np.uint8)
+            cv2.imshow("Segmentation", masked_color_bgr)
             key = cv2.waitKey(1)
             hosegmentor.handle_key(key)
             if hosegmentor.quit_requested:
                 break
 
             # 스페이스바 입력 확인
-            dr, dw, de = select.select([sys.stdin], [], [], 0.01)
-            if dr:
-                key = sys.stdin.read(1)
-                if key == ' ':
-                    print("\n[Mesh] Starting reconstruction...")
+            term_key = read_key_nonblocking(timeout=0.01)
+            if term_key == ' ' or key == ord(' '):
+                print("\n[Mesh] Starting reconstruction...")
 
-                    # 캡처마다 현재 시간으로 하위 폴더를 만들어 모든 결과물을 그 안에 저장
-                    capture_dir = os.path.join("output", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
-                    os.makedirs(capture_dir, exist_ok=True)
+                # 캡처마다 현재 시간으로 하위 폴더를 만들어 모든 결과물을 그 안에 저장
+                capture_dir = os.path.join("output", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+                os.makedirs(capture_dir, exist_ok=True)
 
-                    masked_color_pil = Image.fromarray(masked_color)
+                masked_color_pil = Image.fromarray(cv2.cvtColor(masked_color_bgr, cv2.COLOR_BGR2RGB))
 
-                    cv2.imwrite(os.path.join(capture_dir, "rgb.png"), color)
-                    cv2.imwrite(os.path.join(capture_dir, "rgb_masked.png"), masked_color)
-                    print("save images")
+                cv2.imwrite(os.path.join(capture_dir, "rgb.png"), frame_bgr)
+                cv2.imwrite(os.path.join(capture_dir, "rgb_masked.png"), masked_color_bgr)
+                print("save images")
 
-                    if flag_recon_mesh:
-                        try:
-                            mesh_glb = meshrecon.run(masked_color_pil)
+                if flag_recon_mesh:
+                    mesh_glb = None
+                    try:
+                        mesh_glb = meshrecon.run(masked_color_pil)
 
-                            output_path = os.path.join(capture_dir, "mesh.glb")
-                            mesh_glb.export(output_path)
-                            print(f"[Mesh] Saved to {output_path}")
+                        output_path = os.path.join(capture_dir, "mesh.glb")
+                        mesh_glb.export(output_path)
+                        print(f"[Mesh] Saved to {output_path}")
 
-                            if flag_behavior:
-                                try:
-                                    print("\n[Behavior] Estimating properties from GLB...")
-                                    json_path = behavior_estimator.run(
-                                        output_path,
-                                        output_json=os.path.join(capture_dir, "property.json"),
-                                        vlm_input_dir=capture_dir,
-                                    )
-                                    print(f"[Behavior] Property JSON saved to {json_path}")
-                                except Exception as e:
-                                    print(f"[Error] Behavior estimation failed: {e}")
+                        if flag_behavior:
+                            try:
+                                print("\n[Behavior] Estimating properties from GLB...")
+                                json_path = behavior_estimator.run(
+                                    output_path,
+                                    output_json=os.path.join(capture_dir, "property.json"),
+                                    vlm_input_dir=capture_dir,
+                                )
+                                print(f"[Behavior] Property JSON saved to {json_path}")
+                            except Exception as e:
+                                print(f"[Error] Behavior estimation failed: {e}")
 
-                        except Exception as e:
-                            print(f"[Error] Mesh reconstruction failed: {e}")
-                        finally:
-                            # 메시 재구성 객체 삭제 및 메모리 정리
+                    except Exception as e:
+                        print(f"[Error] Mesh reconstruction failed: {e}")
+                    finally:
+                        # 메시 재구성 객체 삭제 및 메모리 정리
+                        if mesh_glb is not None:
                             del mesh_glb
-                            del masked_color_pil
+                        del masked_color_pil
 
-                            clear_gpu_memory()
-                            print_gpu_memory()
+                        clear_gpu_memory()
+                        print_gpu_memory()
 
-                    print("[Info] Ready for next reconstruction (Press Space)")
+                print("[Info] Ready for next reconstruction (Press Space)")
 
     except KeyboardInterrupt:
         print("\n[Info] Shutting down...")
@@ -200,7 +196,7 @@ def main():
 
         cap.release()
         cv2.destroyAllWindows()
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        restore_stdin_cbreak(console_state)
 
 
 if __name__ == '__main__':

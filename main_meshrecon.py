@@ -10,15 +10,15 @@ import numpy as np
 from PIL import Image
 import socket
 import torch
-import select, tty, termios
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from threading import Thread
 import gc
 
+from modules_console import enable_cbreak_stdin, read_key_nonblocking, restore_stdin_cbreak
 from modules_mesh import MeshReconstructor
 from modules_segment import HOSegmentor
-from modules_hotrack import InteractiveHoTrackSegmentor
+from modules_hotrack import build_interactive_hotrack_segmentor_from_env
 from modules_hl2 import Hl2Manager
 from modules_behavior import BehaviorPropertyEstimator
 
@@ -29,21 +29,17 @@ from modules_behavior import BehaviorPropertyEstimator
 
 
 ## Set HoloLens2 options ##
-host = '192.168.50.137'  # HoloLens2 wifi address
+host = os.environ.get('UVR_HL2_HOST', '192.168.50.137')  # HoloLens2 wifi address
 
 pv_width = 1280
 pv_height = 720
 pv_fps = 30
 
-fd = sys.stdin.fileno()
-old_settings = termios.tcgetattr(fd)
-tty.setcbreak(fd)
-
 # HTTP 서버 설정
 HTTP_PORT = 8000
 
-flag_recon_mesh = True
-flag_interactive_hotrack = True
+flag_recon_mesh = False
+flag_interactive_hotrack = os.environ.get("UVR_USE_INTERACTIVE_HOTRACK", "1").strip().lower() not in {"0", "false", "no", "off"}
 flag_behavior = False  # run behavior property estimation (GLB -> property JSON) after each mesh
 
 
@@ -94,12 +90,12 @@ def main():
     ###################### init models ######################
     if flag_interactive_hotrack:
         print("\n[Init] Initializing InteractiveHoTrackSegmentor...")
-        hosegmentor = InteractiveHoTrackSegmentor(output_dir="output/hotrack_stage1")
+        hosegmentor = build_interactive_hotrack_segmentor_from_env()
     else:
         print("\n[Init] Initializing legacy HOSegmentor...")
         hosegmentor = HOSegmentor()
-    print("\n[Init] Initializing MeshReconstructor...")
     if flag_recon_mesh:
+        print("\n[Init] Initializing MeshReconstructor...")
         meshrecon = MeshReconstructor()
     if flag_behavior:
         print("\n[Init] Initializing BehaviorPropertyEstimator...")
@@ -116,6 +112,7 @@ def main():
     obj_idx = 0
 
     print("\n[Init] Starting loop")
+    console_state = enable_cbreak_stdin()
     try:
         while True:
             ###################### receive input ######################
@@ -163,10 +160,8 @@ def main():
                     break
 
             # 스페이스바 입력 확인
-            dr, dw, de = select.select([sys.stdin], [], [], 0.01)
-            if dr:
-                key = sys.stdin.read(1)
-                if key == ' ':
+            key = read_key_nonblocking(timeout=0.01)
+            if key == ' ':
                     print("\n[Mesh] Starting reconstruction...")
 
                     # 캡처마다 현재 시간으로 하위 폴더를 만들어 모든 결과물을 그 안에 저장
@@ -241,7 +236,7 @@ def main():
         sock.close()
         hl2_manager.destroy()
         cv2.destroyAllWindows()
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        restore_stdin_cbreak(console_state)
 
 
 if __name__ == '__main__':

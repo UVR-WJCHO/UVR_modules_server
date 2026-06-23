@@ -34,6 +34,26 @@ def _env_flag(name: str, default: bool) -> bool:
     return str(raw).strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return int(default)
+    try:
+        return int(raw)
+    except ValueError:
+        return int(default)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return float(default)
+    try:
+        return float(raw)
+    except ValueError:
+        return float(default)
+
+
 def _hograph_plus_fallback(rel_path: str | Path) -> Optional[Path]:
     root_raw = os.environ.get("HOGRAPH_PLUS_ROOT")
     roots = [Path(root_raw).expanduser()] if root_raw else [
@@ -78,9 +98,12 @@ def apply_track_only_hotrack_runtime_flags(hotrack: Any) -> None:
     hotrack.enable_structural_ops = False
     hotrack.track_hand_masks = False
     hotrack.skip_existing_object_box_prompts = True
+    hotrack.skip_existing_object_box_prompts_for_split_candidates = False
     hotrack.use_hand_matched_det_boxes_only = True
     hotrack.use_all_object_boxes = False
-    hotrack.enable_component_promote_from_det = True
+    hotrack.enable_component_promote_from_det = False
+    hotrack.enable_detector_guided_single_component_split = True
+    hotrack.enable_post_track_duplicate_removal = False
     hotrack.replay_enable_structural_split_logic = False
     hotrack.attach_proxy_backfill_enabled = False
     hotrack.attach_proxy_signal_persist_frames = 0
@@ -88,6 +111,25 @@ def apply_track_only_hotrack_runtime_flags(hotrack: Any) -> None:
     hotrack.split_replay_debug = False
     hotrack.attach_replay_debug = False
     hotrack.max_new_per_frame = 0
+
+
+def build_interactive_hotrack_segmentor_from_env(**overrides: Any) -> "InteractiveHoTrackSegmentor":
+    kwargs: Dict[str, Any] = {
+        "output_dir": os.environ.get("UVR_HOTRACK_OUTPUT_DIR", "output/hotrack_stage1"),
+        "video_name": os.environ.get("UVR_HOTRACK_VIDEO_NAME", "hl2_online"),
+        "yolo_model_path": os.environ.get("UVR_HOTRACK_YOLO_MODEL", "pretrained/object/yolo_100doh_best.pt"),
+        "sam2_variant": os.environ.get("UVR_HOTRACK_SAM2_VARIANT", "tiny"),
+        "sam2_checkpoint": os.environ.get("UVR_HOTRACK_SAM2_CHECKPOINT", ""),
+        "max_side": _env_int("UVR_HOTRACK_MAX_SIDE", 0),
+        "ho_thresh_hand": _env_float("UVR_HOTRACK_HO_THRESH_HAND", 0.55),
+        "ho_thresh_obj": _env_float("UVR_HOTRACK_HO_THRESH_OBJ", 0.55),
+        "target_contact_code": os.environ.get("UVR_HOTRACK_TARGET_CONTACT", "P"),
+        "backfill_window": _env_int("UVR_HOTRACK_BACKFILL_WINDOW", 120),
+        "save_tracking_json": _env_flag("UVR_HOTRACK_SAVE_TRACKING_JSON", True),
+        "dino_allow_download": _env_flag("UVR_HOTRACK_DINO_ALLOW_DOWNLOAD", False),
+    }
+    kwargs.update(overrides)
+    return InteractiveHoTrackSegmentor(**kwargs)
 
 
 class InteractiveHoTrackSegmentor:
@@ -252,6 +294,9 @@ class InteractiveHoTrackSegmentor:
             "use_hand_matched_det_boxes_only": bool(getattr(self.hotrack, "use_hand_matched_det_boxes_only", False)),
             "use_all_object_boxes": bool(getattr(self.hotrack, "use_all_object_boxes", False)),
             "enable_component_promote_from_det": bool(getattr(self.hotrack, "enable_component_promote_from_det", False)),
+            "enable_detector_guided_single_component_split": bool(getattr(self.hotrack, "enable_detector_guided_single_component_split", False)),
+            "skip_existing_object_box_prompts_for_split_candidates": bool(getattr(self.hotrack, "skip_existing_object_box_prompts_for_split_candidates", False)),
+            "enable_post_track_duplicate_removal": bool(getattr(self.hotrack, "enable_post_track_duplicate_removal", False)),
             "replay_enable_structural_split_logic": bool(getattr(self.hotrack, "replay_enable_structural_split_logic", False)),
         }
 

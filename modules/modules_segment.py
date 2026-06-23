@@ -6,6 +6,7 @@ import mediapipe as mp
 import torch
 
 sys.path.append('./modules/segmentor')
+sys.path.append('./modules/segmentor/sam2_realtime')
 from sam2_realtime.sam2.build_sam import build_sam2_realtime_predictor
 import time
 import ultralytics

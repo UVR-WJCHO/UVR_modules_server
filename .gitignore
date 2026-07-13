@@ -5,6 +5,7 @@ __pycache__
 _calibration/rm_depth_ahat/*
 output/*
 pretrained/*
+!pretrained/.gitkeep
 
 modules/handtracker/checkpoint/*
 modules/handtracker_wilor/pretrained_models/*

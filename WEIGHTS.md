@@ -78,6 +78,18 @@
 | `wilor_final.ckpt` | `modules/handtracker_wilor/pretrained_models/` | 2.4 GB | WiLoR `HandTracker_our_wilor` ([module_WILOR.py:73](modules/handtracker_wilor/module_WILOR.py#L73)) |
 | `detector.pt` | `modules/handtracker_wilor/pretrained_models/` | 52 MB | WiLoR 손 검출 ([module_WILOR.py:77](modules/handtracker_wilor/module_WILOR.py#L77)) |
 
+### ONNX 변형 (WILOR-ONNX, `main_handtrack.py` v3) — `pretrained/handtracker_onnx/`
+
+소비: [modules_hand.py](modules/modules_hand.py) `HandTracker_onnx` → `modules/handtracker_onnx/` (self-contained; ONNXRuntime + YOLO). `main_handtrack.py`에서 space 키로 v3 선택. 경로는 `WilorHandTrackerONNX(onnx_path=..., detector_path=...)` 인자로 오버라이드 가능.
+
+| 파일 | 위치 | 크기 | 비고 |
+|---|---|---|---|
+| `wilor_final_standard.onnx` (+ external-data weight 411개) | `pretrained/handtracker_onnx/` | ≈ 2.4 GB | ONNX 그래프(849 KB) + 외부 weight. .onnx와 weight 파일들은 **같은 폴더**에 있어야 로드됨 |
+| `detector.pt` | `pretrained/handtracker_onnx/` | 52 MB | YOLO 손 검출 (WiLoR와 동일 파일) |
+| `model_config.yaml` | `pretrained/handtracker_onnx/` | 2 KB | WiLoR 모델 config |
+
+> `onnxruntime-gpu` 필요. MANO 파일은 ONNX 추론에 불필요. `uvr_integ` 환경에서 ~12ms/추론.
+
 ### MANO 모델 (손 메쉬 파라미터)
 | 파일 | 위치 | 크기 |
 |---|---|---|
@@ -111,6 +123,7 @@
 
 ```
 pretrained/*
+!pretrained/.gitkeep
 modules/segmentor/sam2_realtime/checkpoints/*
 modules/segmentor/100DOH_small.pt
 modules/handtracker/checkpoint/*

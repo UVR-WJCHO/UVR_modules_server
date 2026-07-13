@@ -11,7 +11,7 @@ import keyboard
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "modules"))
 
 # Import refactored modules
-from modules_hand import HandTracker_our, HandTracker_our_wilor
+from modules_hand import HandTracker_our, HandTracker_our_wilor, HandTracker_onnx
 from modules_gesture import GestureClassfier
 from modules_obj import ObjTracker
 from modules_hl2 import Hl2Manager
@@ -56,7 +56,20 @@ def main():
     try:
         track_hand_v1 = HandTracker_our()
         track_hand_v2 = HandTracker_our_wilor()
-        flag_hand_model = True  # Start with v2
+        hand_trackers = [track_hand_v1, track_hand_v2]
+        hand_model_names = ['v1 (SARTE)', 'v2 (WILOR)']
+
+        # v3: optional ONNX WILOR tracker. Guarded so a missing ONNX weight set
+        # (pretrained/handtracker_onnx/*) does not break the v1/v2 pipeline.
+        try:
+            track_hand_v3 = HandTracker_onnx()
+            track_hand_v3.warmup(np.zeros((PV_HEIGHT, PV_WIDTH, 3), dtype=np.uint8))
+            hand_trackers.append(track_hand_v3)
+            hand_model_names.append('v3 (WILOR-ONNX)')
+        except Exception as e:
+            print(f"[HandTracker_onnx] unavailable, skipping v3: {e}")
+
+        hand_model_idx = 1  # Start with v2
 
         track_gesture = GestureClassfier(
             ckpt=f"./modules/gestureclassifier/checkpoints/{CKPT_FILE}",
@@ -93,10 +106,10 @@ def main():
     try:
         while True:
             # Switch hand model on 'space' press (if keyboard access is available)
-            current_hand_tracker = track_hand_v2 if flag_hand_model else track_hand_v1
+            current_hand_tracker = hand_trackers[hand_model_idx]
             if keyboard.is_pressed('space'):
-                flag_hand_model = not flag_hand_model
-                print(f"Hand model switched to {'v2' if flag_hand_model else 'v1'}")
+                hand_model_idx = (hand_model_idx + 1) % len(hand_trackers)
+                print(f"Hand model switched to {hand_model_names[hand_model_idx]}")
 
             # Determine if depth image should be processed this frame
             idx_depth = (idx_depth + 1) % (NUM_DEPTH_COUNT + 1)

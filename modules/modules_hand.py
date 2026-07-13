@@ -23,6 +23,28 @@ class HandTracker_our_wilor():
         return self.model_hand.run(input)
 
 
+class HandTracker_onnx():
+    # ONNX-based WILOR hand tracker. onnxruntime is imported lazily inside
+    # __init__ so importing this module stays cheap for users of the other
+    # trackers (SARTE / mediapipe / WILOR-torch).
+    def __init__(self, **kwargs):
+        from handtracker_onnx import WilorHandTrackerONNX
+        self.model_hand = WilorHandTrackerONNX(**kwargs)
+
+    def warmup(self, image=None):
+        self.model_hand.warmup(image)
+
+    def run(self, input):
+        # input : img_cv (BGR). Returns (21, 3) [u, v, z] to match the other
+        # trackers' output contract, or None when no hand is detected.
+        result = self.model_hand.process(input)
+        if result is None:
+            return None
+        joints_2d = result['joints_2d']       # (21, 2) pixel coords
+        z = result['joints_3d'][:, 2:3]        # (21, 1) wrist-relative depth
+        return np.concatenate([joints_2d, z], axis=1)
+
+
 
 class HandTracker_our():
     def __init__(self):

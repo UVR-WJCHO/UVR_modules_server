@@ -70,11 +70,13 @@ class HandTracker_wilor():
     def __init__(self, img_w=640, img_h=360, det_cooltime=10):
 
         curr_dir = os.path.dirname(os.path.abspath(__file__))
-        checkpoint_path = os.path.join(curr_dir, 'pretrained_models', 'wilor_final.ckpt')
-        cfg_path = os.path.join(curr_dir, 'pretrained_models', 'model_config.yaml')
-        mano_path = os.path.join(curr_dir, 'mano_data')
+        # Weights live under repo-root pretrained/handtracker_wilor/ (see WEIGHTS.md)
+        weights_dir = os.path.abspath(os.path.join(curr_dir, os.pardir, os.pardir, 'pretrained', 'handtracker_wilor'))
+        checkpoint_path = os.path.join(weights_dir, 'wilor_final.ckpt')
+        cfg_path = os.path.join(weights_dir, 'model_config.yaml')
+        mano_path = os.path.join(weights_dir, 'mano_data')
 
-        YOLO_hand_path = os.path.join(curr_dir, 'pretrained_models', 'detector.pt')
+        YOLO_hand_path = os.path.join(weights_dir, 'detector.pt')
 
         print("check input image scale. default : img_w=640, img_h=360")
 

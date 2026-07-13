@@ -1,0 +1,16 @@
+# Core numerical / geometry stack
+numpy>=1.24
+scipy>=1.10
+trimesh>=4.0
+opencv-python>=4.8
+pillow>=10.0
+
+# GPU differentiable rendering.
+# torch must match your CUDA toolkit — install the right build FIRST, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# nvdiffrast is not on PyPI as a wheel for every platform; install from source:
+#   pip install git+https://github.com/NVlabs/nvdiffrast.git
+# Reference environment used to produce the sample results:
+#   torch==2.11.0+cu128   nvdiffrast==0.4.0   (NVIDIA RTX A6000, CUDA 12.8)
+torch
+nvdiffrast

@@ -21,6 +21,7 @@ from modules_segment import HOSegmentor
 from modules_hotrack import build_interactive_hotrack_segmentor_from_env
 from modules_hl2 import Hl2Manager
 from modules_behavior import BehaviorPropertyEstimator
+from modules_texpaint import TexPaintRunner
 
 
 ## check before execution
@@ -39,8 +40,11 @@ pv_fps = 30
 HTTP_PORT = 8000
 
 flag_recon_mesh = False
-flag_interactive_hotrack = os.environ.get("UVR_USE_INTERACTIVE_HOTRACK", "1").strip().lower() not in {"0", "false", "no", "off"}
+flag_interactive_hotrack = True  # True: InteractiveHoTrackSegmentor, False: legacy HOSegmentor
 flag_behavior = False  # run behavior property estimation (GLB -> property JSON) after each mesh
+# When True, texture the TRELLIS geometry with Hunyuan3D-Paint (separate env, PBR)
+# instead of using TRELLIS's own gaussian-baked texture. Requires flag_recon_mesh.
+flag_texpaint = False 
 
 
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -100,6 +104,9 @@ def main():
     if flag_behavior:
         print("\n[Init] Initializing BehaviorPropertyEstimator...")
         behavior_estimator = BehaviorPropertyEstimator()
+    if flag_texpaint:
+        print("\n[Init] Initializing TexPaintRunner...")
+        texpaint_runner = TexPaintRunner()
 
     ###################### init hl2 ######################
     print("\n[Init] Initializing Hl2Manager...")
@@ -186,6 +193,19 @@ def main():
                             output_path = os.path.join(capture_dir, "mesh.glb")
                             mesh_glb.export(output_path)
                             print(f"[Mesh] Saved to {output_path}")
+
+                            if flag_texpaint:
+                                # TRELLIS를 GPU에서 잠시 내려 paint(별도 env, ~21GB)용 VRAM 확보
+                                meshrecon.pipeline.cpu()
+                                clear_gpu_memory()
+                                painted_path = os.path.join(capture_dir, "mesh_painted.glb")
+                                ref_image = os.path.join(capture_dir, "rgb_masked.png")
+                                try:
+                                    texpaint_runner.run(output_path, ref_image, painted_path)
+                                    output_path = painted_path
+                                    print(f"[TexPaint] Saved to {painted_path}")
+                                finally:
+                                    meshrecon.pipeline.cuda()
 
                             # HoloLens2에 신호 전송
                             signal = b"1"

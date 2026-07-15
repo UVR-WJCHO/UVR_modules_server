@@ -39,7 +39,7 @@ pv_fps = 30
 # HTTP 서버 설정
 HTTP_PORT = 8000
 
-flag_recon_mesh = False
+flag_recon_mesh = True
 flag_interactive_hotrack = True  # True: InteractiveHoTrackSegmentor, False: legacy HOSegmentor
 flag_behavior = False  # run behavior property estimation (GLB -> property JSON) after each mesh
 # When True, texture the TRELLIS geometry with Hunyuan3D-Paint (separate env, PBR)
@@ -175,10 +175,13 @@ def main():
                     capture_dir = os.path.join("output", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
                     os.makedirs(capture_dir, exist_ok=True)
 
-                    masked_color_pil = Image.fromarray(masked_color)
+                    # mask를 alpha로 전달 -> TRELLIS가 rembg 재분리를 건너뛰고 이 mask를
+                    # 그대로 사용(배경이 mesh 판(slab)으로 붙는 artifact 방지)
+                    masked_rgba = np.dstack([color, (obj_mask.astype(np.uint8) * 255)])
+                    masked_color_pil = Image.fromarray(masked_rgba, "RGBA")
 
                     cv2.imwrite(os.path.join(capture_dir, "rgb.png"), color)
-                    cv2.imwrite(os.path.join(capture_dir, "rgb_masked.png"), masked_color)
+                    cv2.imwrite(os.path.join(capture_dir, "rgb_masked.png"), masked_rgba)
                     np.save(os.path.join(capture_dir, "depth.npy"), depth)
                     print("save images")
 
@@ -188,7 +191,13 @@ def main():
 
                     if flag_recon_mesh:
                         try:
-                            mesh_glb = meshrecon.run(masked_color_pil)
+                            mesh_glb, mesh_preview = meshrecon.run(masked_color_pil, return_preview=True)
+
+                            # 생성 확인용 프리뷰(2뷰) 표시 + 저장
+                            preview_bgr = cv2.cvtColor(mesh_preview, cv2.COLOR_RGB2BGR)
+                            cv2.imshow("Mesh preview", preview_bgr)
+                            cv2.waitKey(1)
+                            cv2.imwrite(os.path.join(capture_dir, "mesh_preview.png"), preview_bgr)
 
                             output_path = os.path.join(capture_dir, "mesh.glb")
                             mesh_glb.export(output_path)
@@ -212,7 +221,7 @@ def main():
                             sock.sendto(signal, (host, 5005))
                             print(f"[UDP] Signal sent to {host}:5005")
 
-                            # local_ip = sock_check.gethostbyname(sock_check.gethostname())
+                            # local_ip = ock_check.gethostbyname(sock_check.gethostname())
                             # print(f"[Info] GLB available at http://{local_ip}:{HTTP_PORT}/output.glb")
 
                             if flag_behavior:

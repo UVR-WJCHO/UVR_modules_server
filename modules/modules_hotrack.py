@@ -125,7 +125,10 @@ def build_interactive_hotrack_segmentor_from_env(**overrides: Any) -> "Interacti
         "ho_thresh_obj": _env_float("UVR_HOTRACK_HO_THRESH_OBJ", 0.55),
         "target_contact_code": os.environ.get("UVR_HOTRACK_TARGET_CONTACT", "P"),
         "backfill_window": _env_int("UVR_HOTRACK_BACKFILL_WINDOW", 120),
-        "save_tracking_json": _env_flag("UVR_HOTRACK_SAVE_TRACKING_JSON", True),
+        # per-frame disk dumps (mask PNG/overlay/JSON + tracking JSON) are debug-only
+        # and not used by the live pipeline -> off by default (set env=1 to re-enable)
+        "save_masks": _env_flag("UVR_HOTRACK_SAVE_MASKS", False),
+        "save_tracking_json": _env_flag("UVR_HOTRACK_SAVE_TRACKING_JSON", False),
         "dino_allow_download": _env_flag("UVR_HOTRACK_DINO_ALLOW_DOWNLOAD", False),
     }
     kwargs.update(overrides)

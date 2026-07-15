@@ -2,7 +2,7 @@
 Thin bridge from the main pipeline to the standalone Hunyuan3D-Paint texture
 stage. The paint model lives in a SEPARATE conda env (`hunyuan3dpaint`) with
 dependencies that conflict with the main/TRELLIS env, so we invoke it as a
-subprocess (texpaint/paint_texture.py) rather than importing it in-process.
+subprocess (modules/texpaint/paint_texture.py) rather than importing it in-process.
 
 Only stdlib is used here, so importing this module is cheap and never touches
 the GPU. Configurable via env vars (all have working defaults):
@@ -17,7 +17,7 @@ the GPU. Configurable via env vars (all have working defaults):
 import os
 import subprocess
 
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))  # modules/
 
 
 class TexPaintRunner:
@@ -28,7 +28,7 @@ class TexPaintRunner:
         )
         self.script = os.environ.get(
             "UVR_TEXPAINT_SCRIPT",
-            os.path.join(_PROJECT_ROOT, "texpaint", "paint_texture.py"),
+            os.path.join(_MODULE_DIR, "texpaint", "paint_texture.py"),
         )
         self.repo = os.environ.get(
             "HUNYUAN3D_REPO", "/home/uvrlab/projects/extra/Hunyuan3D-2.1"

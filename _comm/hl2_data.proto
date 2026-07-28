@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+// Reconstructed from WiseUIAppUnity/Assets/Scripts/HL2Data/Hl2Data.cs (C# gencode).
+// Full HL2 -> server packet including RGB-aligned depth. Field numbers MUST match
+// the C# sender exactly; the wire format is compatible with the older 8-field
+// packet (fields 1-8 unchanged).
+message HL2SensorPacket {
+  bytes  image_data        = 1;   // JPEG PV color image
+  float  head_pos_x        = 2;
+  float  head_pos_y        = 3;
+  float  head_pos_z        = 4;
+  repeated float right_hand = 5;   // joints (xyz * N)
+  repeated float left_hand  = 6;
+  string speech            = 7;
+  float  timestamp         = 8;
+
+  float  head_rot_x        = 9;    // head rotation quaternion
+  float  head_rot_y        = 10;
+  float  head_rot_z        = 11;
+  float  head_rot_w        = 12;
+
+  float  eye_gaze_origin_x = 13;
+  float  eye_gaze_origin_y = 14;
+  float  eye_gaze_origin_z = 15;
+  float  eye_gaze_dir_x    = 16;
+  float  eye_gaze_dir_y    = 17;
+  float  eye_gaze_dir_z    = 18;
+
+  repeated float right_hand_rot = 19;  // joint rotations (quat * N)
+  repeated float left_hand_rot  = 20;
+  repeated int32 right_hand_id  = 21;  // joint ids
+  repeated int32 left_hand_id   = 22;
+
+  repeated float cam_to_world = 23;    // 4x4 PV cam->world (row-major, 16 floats)
+  float  fx = 24;                      // PV intrinsics
+  float  fy = 25;
+  float  cx = 26;
+  float  cy = 27;
+
+  bool   pinch_left    = 28;
+  bool   pinch_right   = 29;
+  bool   grab_left     = 30;
+  bool   grab_right    = 31;
+  float  pinch_left_x  = 32;
+  float  pinch_left_y  = 33;
+  float  pinch_left_z  = 34;
+  float  pinch_right_x = 35;
+  float  pinch_right_y = 36;
+  float  pinch_right_z = 37;
+
+  // --- Depth (RGB aligned). Same grid/intrinsics/pose as PV image. ---
+  bool   depth_enabled = 38;
+  bytes  depth_data    = 39;   // RGB-aligned 16bit depth PNG (PV resolution, mm). depth[u,v] ~ image[u,v]
+  int32  depth_width   = 40;   // = PV image width
+  int32  depth_height  = 41;   // = PV image height
+  repeated float depth_points = 42;  // (optional) raw world point cloud XYZ, N*3
+}

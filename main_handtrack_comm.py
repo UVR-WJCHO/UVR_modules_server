@@ -181,15 +181,18 @@ def _sample_wrist_depth_mm(depth_mm, u, v, win=3):
     return best if best > 0 else None
 
 
-def lift_pose_cam3d(outs_uvd, depth_mm, fx, fy, cx, cy):
+def lift_pose_cam3d(outs_uvd, depth_mm, fx, fy, cx, cy, wrist_mm_fallback=None):
     """RGB uvd(21x3: u,v @640x360, z=root-relative mm) + aligned depth(mm, PV 해상도)
-    -> absolute 21x3 xyz (meters, PV 카메라 프레임 = OpenCV: +X右 +Y下 +Z앞). 실패 시 None.
-    wrist(관절0) 픽셀의 aligned depth 로 실제 wrist depth 를 얻고, root-relative z 로 나머지를 lifting."""
+    -> absolute 21x3 xyz (meters, PV 카메라 프레임 = OpenCV: +X右 +Y下 +Z앞).
+    wrist(관절0) 픽셀의 aligned depth 로 실제 wrist depth 를 얻고, root-relative z 로 나머지를 lifting.
+    wrist depth 샘플 실패 시 wrist_mm_fallback(직전 취득값)으로 대체.
+    반환 (xyz 21x3 or None, fresh_wrist_mm or None). 둘 다 없으면 (None, None)."""
     H, W = depth_mm.shape[:2]
     sx = W / float(PV_WIDTH); sy = H / float(PV_HEIGHT)   # 640x360 -> PV 해상도로 환산
-    zw = _sample_wrist_depth_mm(depth_mm, outs_uvd[0, 0] * sx, outs_uvd[0, 1] * sy)
+    zw_fresh = _sample_wrist_depth_mm(depth_mm, outs_uvd[0, 0] * sx, outs_uvd[0, 1] * sy)
+    zw = zw_fresh if zw_fresh is not None else wrist_mm_fallback
     if zw is None:
-        return None
+        return None, None
     out = np.zeros((21, 3), np.float32)
     for j in range(21):
         u = outs_uvd[j, 0] * sx
@@ -198,7 +201,7 @@ def lift_pose_cam3d(outs_uvd, depth_mm, fx, fy, cx, cy):
         out[j, 0] = (u - cx) / fx * Z
         out[j, 1] = (v - cy) / fy * Z
         out[j, 2] = Z
-    return out
+    return out, zw_fresh
 
 
 def build_result(pkt, hand_flat, gesture_idx):
@@ -275,6 +278,7 @@ def main():
     valid_gesture = None
     valid_gesture_idx = -1
     debug_pose = np.ones((21, 3))
+    last_wrist_mm = None   # 직전 성공한 wrist depth(mm) — 샘플 실패 시 폴백
 
     # keyboard 단축키(space=모델 전환)는 리눅스에서 root 권한 필요 -> 없으면 비활성화
     try:
@@ -384,8 +388,13 @@ def main():
             cv2.waitKey(1)
 
             # 11. 결과 return — aligned depth 로 lift 한 absolute 3D hand pose(메인) + gesture_idx(덤)
-            hand3d = lift_pose_cam3d(outs, depth_mm, pkt.fx, pkt.fy, pkt.cx, pkt.cy) \
-                     if depth_mm is not None else None
+            hand3d = None
+            if depth_mm is not None:
+                # wrist depth 샘플 실패 시 직전 취득값(last_wrist_mm)으로 폴백
+                hand3d, zw_fresh = lift_pose_cam3d(outs, depth_mm, pkt.fx, pkt.fy, pkt.cx, pkt.cy,
+                                                   last_wrist_mm)
+                if zw_fresh is not None:
+                    last_wrist_mm = zw_fresh   # 성공 시에만 갱신(스케일 drift 방지)
 
             if time.time() - t_cooldown > 0.5:
                 flag_cooldown = False

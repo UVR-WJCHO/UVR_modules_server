@@ -5,9 +5,9 @@
 
   수신: comm_hub(DEALER) 로 HL2DATA(HL2SensorPacket) 구독
         -> RGB(JPEG) + RGB정렬 depth(16bit PNG) + cam_to_world + intrinsics + timestamp
-  송신: 처리 결과(GestureResult)를 comm_hub UPLOAD(kw=GESTURE_RESULT) 로 되돌림
-        -> 수신 프레임의 PV pose + intrinsics + timestamp 를 그대로 echo 해서 포함
-           (HL2 가 결과를 "그 프레임" 좌표계에 정확히 배치할 수 있게)
+  송신: 결과(ServerResult)를 comm_hub UPLOAD(kw=SERVER_RESULT) 로 되돌림.
+        hand pose 가 메인, gesture_idx 는 덤. 수신 프레임의 PV pose + intrinsics +
+        timestamp 를 그대로 echo (HL2 가 결과를 "그 프레임" 좌표계에 배치할 수 있게).
 
 기존 main_handtrack.py 는 그대로 유지되며 이 파일은 별도다.
 
@@ -34,6 +34,8 @@ import zmq
 
 # modules/ 를 top-level 로 import 가능하게 (main_handtrack.py 와 동일)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "modules"))
+# _utils/ (visualize 등) 도 top-level 로
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "_utils"))
 # protobuf 정의는 _comm/ 아래
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "_comm"))
 import hl2_data_pb2 as proto
@@ -42,12 +44,14 @@ import hl2_data_pb2 as proto
 # --- CONFIGURATION ---
 GESTURE_CKPT_FILE = "gesture_checkpoint-40.tar"
 FLAG_INTERACTION_DETECT = False  # object-aware gesture detection
+FLAG_VISUALIZE_DEPTH = False     # True 면 Depth 창을 띄운다 (선택적 시각화)
+FLAG_GESTURE = False              # True 면 gesture 인식 수행 (False 면 hand tracking 만)
 
 # comm_hub 브로커 접속
 BROKER_HOST = "127.0.0.1"   # comm_hub 브로커 IP
 BROKER_PORT = 37001
 RECV_KW = b"HL2DATA"
-RESULT_KW = b"GESTURE_RESULT"
+RESULT_KW = b"SERVER_RESULT"
 IDENTITY = b"HANDTRACK"
 
 # Front RGB camera parameters (hand tracker 입력 크기)
@@ -151,24 +155,16 @@ def decode_depth_m(buf, w, h):
     return dm
 
 
-def build_result(pkt, hand_flat, gesture_idx, gesture_name):
-    """수신 프레임의 pose/intrinsics/timestamp 를 echo 해서 GestureResult 로 직렬화."""
-    r = proto.GestureResult()
+def build_result(pkt, hand_flat, gesture_idx):
+    """수신 프레임의 pose/intrinsics/timestamp 를 echo 해서 ServerResult 로 직렬화.
+    hand pose 가 메인, gesture_idx 는 덤(-1=없음)."""
+    r = proto.ServerResult()
     r.timestamp = pkt.timestamp
     r.cam_to_world.extend(pkt.cam_to_world)      # PV pose (16) echo
     r.fx = pkt.fx; r.fy = pkt.fy; r.cx = pkt.cx; r.cy = pkt.cy
     r.hand.extend([float(x) for x in hand_flat])
     r.gesture_idx = int(gesture_idx)
-    if gesture_name:
-        r.gesture = gesture_name
     return r.SerializeToString()
-
-
-def draw_2d_skeleton(image, joints_2d):
-    for (u, v) in joints_2d.astype(np.int32):
-        if 0 <= u < image.shape[1] and 0 <= v < image.shape[0]:
-            cv2.circle(image, (u, v), 3, (255, 0, 0), -1)
-    return image
 
 
 # --- MAIN ---
@@ -183,6 +179,7 @@ def main():
     from modules_hand import HandTracker_our, HandTracker_our_wilor, HandTracker_onnx
     from modules_gesture import GestureClassfier
     from modules_obj import ObjTracker
+    from visualize import draw_2d_skeleton   # _utils/visualize.py
 
     # 1. Initialize Models
     try:
@@ -209,7 +206,7 @@ def main():
         hand_model_idx = hand_model_names.index('v2 (WILOR)')  # Start with v2
         track_gesture = GestureClassfier(
             ckpt=f"./pretrained/{GESTURE_CKPT_FILE}",
-            seq_len=SEQ_LEN, model_opt=1)
+            seq_len=SEQ_LEN, model_opt=1) if FLAG_GESTURE else None
         track_obj = ObjTracker() if FLAG_INTERACTION_DETECT else None
     except Exception as e:
         print(f"Error initializing models: {e}")
@@ -264,7 +261,7 @@ def main():
             depth = decode_depth_m(pkt.depth_data, PV_WIDTH, PV_HEIGHT) if flag_depth else None
 
             cv2.imshow('RGB', color)
-            if depth is not None:
+            if FLAG_VISUALIZE_DEPTH and depth is not None:
                 cv2.imshow('Depth', np.clip(depth / (DEPTH_MAX_MM / 1000.0), 0, 1))
             cv2.waitKey(1)
 
@@ -276,52 +273,58 @@ def main():
                 valid_gesture = None
                 valid_gesture_idx = -1
                 gesture_cnt = 0
-                # 손 미검출도 결과는 돌려줌(더미 pose + -1) — pose/ts/intrinsics echo
-                hub.send_result(build_result(pkt, debug_pose.flatten(), -1, ""))
+                # 손 미검출: 더미 pose + -1 (pose/ts/intrinsics 는 echo)
+                hub.send_result(build_result(pkt, debug_pose.flatten(), -1))
                 continue
 
-            # 7. Gesture sequence
-            angle_label = track_gesture._compute_ang_from_joint(outs)
-            data_seq = np.concatenate([outs.flatten(), angle_label])
-            queue_righthand.append(data_seq)
+            # 7-9. Gesture recognition (optional, FLAG_GESTURE)
+            if FLAG_GESTURE:
+                # 7. Gesture sequence
+                angle_label = track_gesture._compute_ang_from_joint(outs)
+                data_seq = np.concatenate([outs.flatten(), angle_label])
+                queue_righthand.append(data_seq)
 
-            # 8. Interaction (object-aware)
-            flag_gesture = False
-            if FLAG_INTERACTION_DETECT and flag_depth and depth is not None and track_obj is not None:
-                uv_wrist = outs[0, :2].astype(int)
-                if 0 <= uv_wrist[1] < PV_HEIGHT and 0 <= uv_wrist[0] < PV_WIDTH:
-                    d_wrist = depth[uv_wrist[1], uv_wrist[0]]
-                    obj_nearby_list = track_obj.detect_objs_no_cnt(color_resized, depth, d_wrist)
-                    if len(obj_nearby_list) > 0:
-                        palm_points_2d = outs[[0, 4, 8, 12, 16, 20], :2]
-                        palm_uv = np.mean(palm_points_2d, axis=0)
-                        for obj_nearby in obj_nearby_list:
-                            cx, cy = (obj_nearby[0] + obj_nearby[2]) // 2, (obj_nearby[1] + obj_nearby[3]) // 2
-                            distance = np.sqrt((cx - palm_uv[0]) ** 2 + (cy - palm_uv[1]) ** 2)
-                            if distance < 70.0:
-                                flag_gesture = True
-                                break
+                # 8. Interaction (object-aware)
+                flag_gesture = False
+                if FLAG_INTERACTION_DETECT and flag_depth and depth is not None and track_obj is not None:
+                    uv_wrist = outs[0, :2].astype(int)
+                    if 0 <= uv_wrist[1] < PV_HEIGHT and 0 <= uv_wrist[0] < PV_WIDTH:
+                        d_wrist = depth[uv_wrist[1], uv_wrist[0]]
+                        obj_nearby_list = track_obj.detect_objs_no_cnt(color_resized, depth, d_wrist)
+                        if len(obj_nearby_list) > 0:
+                            palm_points_2d = outs[[0, 4, 8, 12, 16, 20], :2]
+                            palm_uv = np.mean(palm_points_2d, axis=0)
+                            for obj_nearby in obj_nearby_list:
+                                cx, cy = (obj_nearby[0] + obj_nearby[2]) // 2, (obj_nearby[1] + obj_nearby[3]) // 2
+                                distance = np.sqrt((cx - palm_uv[0]) ** 2 + (cy - palm_uv[1]) ** 2)
+                                if distance < 70.0:
+                                    flag_gesture = True
+                                    break
+                else:
+                    flag_gesture = True
+
+                # 9. Gesture classifier
+                gesture = None
+                if flag_gesture and len(queue_righthand) == SEQ_LEN:
+                    gesture_idx, gesture = track_gesture.run(queue_righthand)
+                else:
+                    gesture_idx = -1
+
+                if prev_gesture == gesture and gesture != 'Natural' and gesture is not None:
+                    gesture_cnt += 1
+                else:
+                    gesture_cnt = 0
+                prev_gesture = gesture
+
+                if gesture_cnt > THRESHOLD_NUM:
+                    valid_gesture = gesture
+                    valid_gesture_idx = gesture_idx
+                    gesture_cnt = 0
+                elif gesture_cnt == 0:
+                    valid_gesture = None
+                    valid_gesture_idx = -1
             else:
-                flag_gesture = True
-
-            # 9. Gesture classifier
-            gesture = None
-            if flag_gesture and len(queue_righthand) == SEQ_LEN:
-                gesture_idx, gesture = track_gesture.run(queue_righthand)
-            else:
-                gesture_idx = -1
-
-            if prev_gesture == gesture and gesture != 'Natural' and gesture is not None:
-                gesture_cnt += 1
-            else:
-                gesture_cnt = 0
-            prev_gesture = gesture
-
-            if gesture_cnt > THRESHOLD_NUM:
-                valid_gesture = gesture
-                valid_gesture_idx = gesture_idx
-                gesture_cnt = 0
-            elif gesture_cnt == 0:
+                # gesture 인식 off: hand tracking 만, gesture 는 없음
                 valid_gesture = None
                 valid_gesture_idx = -1
 
@@ -333,23 +336,19 @@ def main():
             cv2.imshow("Prompt", vis_color)
             cv2.waitKey(1)
 
-            # 11. 결과 return (comm_hub UPLOAD, pose/ts/intrinsics echo 포함)
+            # 11. 결과 return — hand pose 는 항상 실제값 전송(메인), gesture_idx 는 덤
             if time.time() - t_cooldown > 0.5:
                 flag_cooldown = False
 
             if not flag_cooldown and valid_gesture is not None and valid_gesture != "Natural":
-                hand_flat = outs.flatten()
                 out_idx = valid_gesture_idx
-                out_name = valid_gesture
                 flag_cooldown = True
                 t_cooldown = time.time()
                 print(f"Sending gesture: {valid_gesture}")
             else:
-                hand_flat = debug_pose.flatten()
                 out_idx = -1
-                out_name = ""
 
-            hub.send_result(build_result(pkt, hand_flat, out_idx, out_name))
+            hub.send_result(build_result(pkt, outs.flatten(), out_idx))
 
     except KeyboardInterrupt:
         pass

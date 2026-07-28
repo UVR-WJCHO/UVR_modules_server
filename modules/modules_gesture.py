@@ -38,23 +38,66 @@ class GestureClassfier:
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
         self.model.to(self.device)
 
-        # Placeholder/Example gesture labels (Must match training data)
-        self.labels = ['Natural', 'Pinch', 'Grab', 'Swipe', 'Push', 'Raise']
-
         # Normalization constants (Must be predetermined from the dataset)
         self.norm_ratio_x = 100
         self.norm_ratio_y = 100
         self.norm_ratio_z = 100
 
-    def _compute_ang_from_joint(self, joint_3d):
-        """
-        Computes joint angles from the 3D joint coordinates (Placeholder).
-        (The actual implementation is assumed to be correct based on the external module).
-        """
-        # Assuming joint_3d is (21, 3) and returns a fixed-size array (e.g., 15)
-        # The logic is abstracted as it relies on specific external libraries or mathematical formulation.
-        return np.ones((15))  # Returns a dummy angle array for structure
+        self.partial_idx = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 16, 17, 20]
+        self.seq_len = seq_len
+        self.idx_to_class = {
+            0: 'CClock_index', 1: 'CClock_thumb',
+            2: 'Clock_index', 3: 'Clock_thumb',
+            4: 'Down_index', 5: 'Down_thumb',
+            6: 'Left_index', 7: 'Left_thumb',
+            8: 'Natural',
+            9: 'Right_index', 10: 'Right_thumb',
+            11: 'Tap_index', 12: 'Tap_thumb',
+            13: 'Up_index', 14: 'Up_thumb'
+        }
 
+
+
+    def _extract_partialhand(self, pts_norm):
+        """Extract features for partial hand joints."""
+        pts_norm = np.asarray(pts_norm)
+        pts_norm_part = []
+        for frame_idx in range(pts_norm.shape[0]):
+            target_pose = pts_norm[frame_idx, :63].reshape(21, 3)
+            target_angle = pts_norm[frame_idx, 63:]
+
+            target_pose = target_pose[self.partial_idx, :]
+            target_pose = target_pose.flatten()
+
+            pts_ = np.concatenate((target_pose, target_angle), axis=0)
+            pts_norm_part.append(pts_)
+
+        return np.array(pts_norm_part)
+
+    def _compute_ang_from_joint(self, joint):
+        """Compute angles between joints (21, 3)."""
+        # Define parent and child joint indices
+        v1_indices = [0, 1, 2, 3, 0, 5, 6, 7, 0, 9, 10, 11, 0, 13, 14, 15, 0, 17, 18, 19]
+        v2_indices = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+
+        v1 = joint[v1_indices, :]
+        v2 = joint[v2_indices, :]
+        v = v2 - v1
+
+        # Normalize vectors
+        v = v / np.linalg.norm(v, axis=1)[:, np.newaxis]
+
+        # Calculate angles using arccos of dot product
+        # Indices for angle calculation pairs
+        angle_pairs_v1 = [0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16, 17, 18]
+        angle_pairs_v2 = [1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18, 19]
+
+        dot_product = np.einsum('nt,nt->n', v[angle_pairs_v1, :], v[angle_pairs_v2, :])
+        angle = np.arccos(dot_product)
+        angle = np.degrees(angle)
+
+        return angle
+    
     def _normalize_and_combine(self, frame_data, frame_idx):
         """
         Normalizes the hand pose and combines it with angle data for sequence input.
@@ -92,6 +135,8 @@ class GestureClassfier:
 
         # Prepare and normalize sequence data
         input_data = [self._normalize_and_combine(raw_frame, i) for i, raw_frame in enumerate(sequence_queue)]
+        if self.flag_partial:
+            input_data = self._extract_partialhand(input_data)
 
         # Convert to tensor and run model
         input_tensor = torch.tensor(np.array(input_data), dtype=torch.float32).unsqueeze(0).to(self.device)
@@ -99,10 +144,7 @@ class GestureClassfier:
         with torch.no_grad():
             output = self.model(input_tensor)
 
-        pred_idx = torch.argmax(output.squeeze(0)).item()
+        pred = output.argmax(1).cpu().numpy()
+        gesture = self.idx_to_class[pred[0]]
 
-        if pred_idx < len(self.labels):
-            gesture = self.labels[pred_idx]
-            return pred_idx, gesture
-        else:
-            return -1, "Unknown"
+        return pred[0], gesture

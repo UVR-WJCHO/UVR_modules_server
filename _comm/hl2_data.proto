@@ -55,3 +55,18 @@ message HL2SensorPacket {
   int32  depth_height  = 41;   // = PV image height
   repeated float depth_points = 42;  // (optional) raw world point cloud XYZ, N*3
 }
+
+// Server -> HL2 result (comm_hub UPLOAD, kw=GESTURE_RESULT). The PV pose /
+// intrinsics / timestamp of the source frame are echoed back so HL2 can
+// place the result in the exact frame it was computed from.
+message GestureResult {
+  float  timestamp = 1;              // echoed source HL2SensorPacket.timestamp
+  repeated float cam_to_world = 2;   // echoed PV cam->world (16 floats)
+  float  fx = 3;                     // echoed PV intrinsics
+  float  fy = 4;
+  float  cx = 5;
+  float  cy = 6;
+  repeated float hand = 7;           // hand joints (uvd flatten, e.g. 21*3)
+  int32  gesture_idx = 8;            // -1 = none
+  string gesture = 9;                // gesture name (optional)
+}

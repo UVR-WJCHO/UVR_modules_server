@@ -66,6 +66,8 @@ message ServerResult {
   float  fy = 4;
   float  cx = 5;
   float  cy = 6;
-  repeated float hand = 7;           // hand joints (uvd flatten, e.g. 21*3) -- MAIN
+  repeated float hand = 7;           // MAIN: absolute 3D joints (21*3 xyz, meters, PV camera
+                                     //   frame, OpenCV axes +X right/+Y down/+Z fwd, DexYCB order).
+                                     //   server-lifted: real wrist depth from aligned depth + root-rel z
   int32  gesture_idx = 8;            // -1 = none (bonus; HL2 maps idx->name)
 }

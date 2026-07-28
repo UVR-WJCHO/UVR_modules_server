@@ -6,8 +6,9 @@
   수신: comm_hub(DEALER) 로 HL2DATA(HL2SensorPacket) 구독
         -> RGB(JPEG) + RGB정렬 depth(16bit PNG) + cam_to_world + intrinsics + timestamp
   송신: 결과(ServerResult)를 comm_hub UPLOAD(kw=SERVER_RESULT) 로 되돌림.
-        hand pose 가 메인, gesture_idx 는 덤. 수신 프레임의 PV pose + intrinsics +
-        timestamp 를 그대로 echo (HL2 가 결과를 "그 프레임" 좌표계에 배치할 수 있게).
+        hand pose 가 메인(gesture_idx 는 덤). hand 는 **absolute 3D 관절**(21x3 xyz, meters,
+        PV 카메라 프레임)로, aligned depth 에서 얻은 실제 wrist depth + root-relative z 로
+        서버에서 lift 한 값이다. 수신 프레임의 PV pose/intrinsics/timestamp 도 echo.
 
 기존 main_handtrack.py 는 그대로 유지되며 이 파일은 별도다.
 
@@ -155,6 +156,51 @@ def decode_depth_m(buf, w, h):
     return dm
 
 
+def decode_depth_aligned_mm(buf):
+    """RGB-aligned depth PNG -> uint16 (H,W) mm, native PV 해상도(리사이즈 X). 없으면 None."""
+    if not buf:
+        return None
+    d = cv2.imdecode(np.frombuffer(buf, np.uint8), cv2.IMREAD_UNCHANGED)
+    if d is None:
+        return None
+    return d[:, :, 0] if d.ndim == 3 else d
+
+
+def _sample_wrist_depth_mm(depth_mm, u, v, win=3):
+    """(u,v) 주변 window 의 유효(>0) depth 중 최근접(frontmost=손 표면) mm. 없으면 None."""
+    H, W = depth_mm.shape[:2]
+    u = int(round(u)); v = int(round(v))
+    best = 0
+    for dy in range(-win, win + 1):
+        for dx in range(-win, win + 1):
+            x, y = u + dx, v + dy
+            if 0 <= x < W and 0 <= y < H:
+                m = int(depth_mm[y, x])
+                if m > 0 and (best == 0 or m < best):
+                    best = m
+    return best if best > 0 else None
+
+
+def lift_pose_cam3d(outs_uvd, depth_mm, fx, fy, cx, cy):
+    """RGB uvd(21x3: u,v @640x360, z=root-relative mm) + aligned depth(mm, PV 해상도)
+    -> absolute 21x3 xyz (meters, PV 카메라 프레임 = OpenCV: +X右 +Y下 +Z앞). 실패 시 None.
+    wrist(관절0) 픽셀의 aligned depth 로 실제 wrist depth 를 얻고, root-relative z 로 나머지를 lifting."""
+    H, W = depth_mm.shape[:2]
+    sx = W / float(PV_WIDTH); sy = H / float(PV_HEIGHT)   # 640x360 -> PV 해상도로 환산
+    zw = _sample_wrist_depth_mm(depth_mm, outs_uvd[0, 0] * sx, outs_uvd[0, 1] * sy)
+    if zw is None:
+        return None
+    out = np.zeros((21, 3), np.float32)
+    for j in range(21):
+        u = outs_uvd[j, 0] * sx
+        v = outs_uvd[j, 1] * sy
+        Z = (zw + (outs_uvd[j, 2] - outs_uvd[0, 2])) / 1000.0   # mm -> m
+        out[j, 0] = (u - cx) / fx * Z
+        out[j, 1] = (v - cy) / fy * Z
+        out[j, 2] = Z
+    return out
+
+
 def build_result(pkt, hand_flat, gesture_idx):
     """수신 프레임의 pose/intrinsics/timestamp 를 echo 해서 ServerResult 로 직렬화.
     hand pose 가 메인, gesture_idx 는 덤(-1=없음)."""
@@ -259,6 +305,7 @@ def main():
             if color is None:
                 continue
             depth = decode_depth_m(pkt.depth_data, PV_WIDTH, PV_HEIGHT) if flag_depth else None
+            depth_mm = decode_depth_aligned_mm(pkt.depth_data)   # lift 용 (native PV 해상도, mm)
 
             cv2.imshow('RGB', color)
             if FLAG_VISUALIZE_DEPTH and depth is not None:
@@ -336,7 +383,10 @@ def main():
             cv2.imshow("Prompt", vis_color)
             cv2.waitKey(1)
 
-            # 11. 결과 return — hand pose 는 항상 실제값 전송(메인), gesture_idx 는 덤
+            # 11. 결과 return — aligned depth 로 lift 한 absolute 3D hand pose(메인) + gesture_idx(덤)
+            hand3d = lift_pose_cam3d(outs, depth_mm, pkt.fx, pkt.fy, pkt.cx, pkt.cy) \
+                     if depth_mm is not None else None
+
             if time.time() - t_cooldown > 0.5:
                 flag_cooldown = False
 
@@ -348,7 +398,9 @@ def main():
             else:
                 out_idx = -1
 
-            hub.send_result(build_result(pkt, outs.flatten(), out_idx))
+            # lift 실패(손목 depth 없음) 시 더미(전부 1.0) = "유효하지 않음" 표시
+            hand_out = hand3d if hand3d is not None else debug_pose
+            hub.send_result(build_result(pkt, hand_out.flatten(), out_idx))
 
     except KeyboardInterrupt:
         pass

@@ -60,6 +60,9 @@ PV_WIDTH = 640
 PV_HEIGHT = 360
 
 DEPTH_MAX_MM = 4000.0  # depth 표시 정규화용
+# aligned depth 는 손목 '표면'을 찍지만 실제 wrist 관절은 그보다 안쪽(카메라에서 더 멂).
+# 표면 depth 에 이 값을 더해 관절 중심 쪽으로 보정(~손목 두께 절반). 튜닝 가능.
+WRIST_DEPTH_OFFSET_MM = 10.0
 
 # Depth image processing frequency
 NUM_DEPTH_COUNT = 10  # Process depth once every N RGB frames
@@ -193,11 +196,12 @@ def lift_pose_cam3d(outs_uvd, depth_mm, fx, fy, cx, cy, wrist_mm_fallback=None):
     zw = zw_fresh if zw_fresh is not None else wrist_mm_fallback
     if zw is None:
         return None, None
+    zc = zw + WRIST_DEPTH_OFFSET_MM   # 손목 표면 -> 관절 중심 보정
     out = np.zeros((21, 3), np.float32)
     for j in range(21):
         u = outs_uvd[j, 0] * sx
         v = outs_uvd[j, 1] * sy
-        Z = (zw + (outs_uvd[j, 2] - outs_uvd[0, 2])) / 1000.0   # mm -> m
+        Z = (zc + (outs_uvd[j, 2] - outs_uvd[0, 2])) / 1000.0   # mm -> m
         out[j, 0] = (u - cx) / fx * Z
         out[j, 1] = (v - cy) / fy * Z
         out[j, 2] = Z

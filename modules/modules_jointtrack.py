@@ -1,286 +1,264 @@
-"""Integrated joint two-part alignment pipeline.
+#!/usr/bin/env python
+"""Fit part meshes to their captures, assemble them, and write what
+metaobj_wrapper/combine_rocket_glb.py needs.
 
-Runs the full chain for a combined frame in one command:
+    python modules_jointtrack.py \
+        --data_dir  /path/to/frames \
+        --parts     2,3,01 \
+        --assembly  23:2,3 \
+        --assembly  012:01,2 \
+        --order     01,2,3 \
+        --output_dir /path/to/out
 
-  1. ALIGN   -- joint_two_part_align.run(): fit two single-part meshes
-                simultaneously to the combined frame's RGB+depth+mask.
-                Produces pose_part_<p>_in_C<cid>.npz per part plus the
-                4-panel / depth-compare diagnostics.
-  2. VERIFY  -- verify_joint_alignment.run(): render the aligned union from
-                top-down / side / combined-mesh viewpoints. Produces
-                verify_topdown_<cid>.png, verify_sideview_<cid>.png,
-                verify_combined_<cid>.png.
-  3. EXPORT  -- write transforms.json in the metaobj_wrapper format (one
-                entry per part: translation / rotation_euler_degrees /
-                rotation_quaternion / scale). Byte-for-byte the same format
-                export_transforms_json.py produces, via the shared
-                part_dict_from_pose() helper.
+Two stages, then the handover.
 
-The three stages already exist as standalone scripts; this file only
-orchestrates them (building the argument namespaces and chaining outputs)
-so a single invocation does alignment -> images -> transforms.json.
+**Fit** each part to the capture it was reconstructed from. Every orientation
+hypothesis is rendered and scored with texture included, because a part that is
+nearly a surface of revolution gives the outline nothing to say about its turn.
+Girth is corrected here too, where the part is alone and fully in view — the
+only place a reconstruction that came out thin can be measured without
+guessing. Out come a pose, a metric scale, and a reshaped mesh.
 
-Usage
------
-    python run_joint_pipeline.py \
-        --data_dir      D:/metaobj/data/2606_samples \
-        --combined_fid  01 \
-        --part_mesh_fids 0,1 \
-        --seed_dir      D:/metaobj/results_2606_v16 \
-        --output_dir    D:/metaobj/results_2606_verify_v8_01 \
-        --device        cuda
+**Assemble** those parts into each capture of them joined. The parts are
+composited through a shared z-buffer so each pixel is judged against whatever
+is actually in front, and they go in one at a time, most visible first. The
+joint is a circle-to-circle registration: parts meet on circular faces, so
+seating, coaxiality and the step at the seam are one constraint rather than
+three that pull against each other.
 
-`--seed_dir` is a convenience: it auto-locates the combined-frame and
-per-part seed poses as <seed_dir>/pose_<cid>.npz and
-<seed_dir>/pose_<part>.npz. Override any of them explicitly with
---combined_pose_npz / --part_pose_npzs if they live elsewhere.
+**Hand over** the corrected meshes as mesh_0.glb, mesh_1.glb, … and a
+transforms.json placing them, in Blender's axes. Assemblies solved against
+different captures are chained through a part they share.
 
-Skip flags let you re-run a single stage:
-    --skip_align   reuse existing pose_part_*_in_C<cid>.npz
-    --skip_verify  don't render the verification views
-    --skip_export  don't (re)write transforms.json
+A *unit* is one part, or several already solved together, named by joining
+their ids with `+`.
 """
 from __future__ import annotations
+
 import argparse
-import importlib.util
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Dict, List
 
 import numpy as np
 
-# Dependency modules live alongside this file under modules/meshalignment/.
-# Load them by relative file path (no sys.path manipulation). They are
-# registered in sys.modules under their bare names so the modules' internal
-# `from auto_align_mesh_rgbd_scale_locked import ...` resolves from the cache.
-_MESH_DIR = Path(__file__).resolve().parent / "meshalignment"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from meshalignment import geom
+from meshalignment.assemble import (NotASimilarity, chain_solves, stage_meshes,
+                                    write_transforms)
+from meshalignment.calibrate import calibrate_frame
+from meshalignment.frames import _paths, load_frame, mask_touches_border
+from meshalignment.joint import align_assembly, choose_rim_pair, load_unit
+from meshalignment.render import MeshRenderer
+from meshalignment.solo import align_frame
+from meshalignment.viz import save_assembly, save_compare, save_orbit_views
 
 
-def _load_local(mod_name):
-    spec = importlib.util.spec_from_file_location(mod_name, _MESH_DIR / f"{mod_name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[mod_name] = module
-    spec.loader.exec_module(module)
-    return module
+# --------------------------------------------------------------------------
+# stage 1
+# --------------------------------------------------------------------------
+
+def fit_parts(data_dir: Path, fids: List[str], out_dir: Path, mesh_dir: Path,
+              device: str, girth_rounds: int, verbose: bool = True) -> dict:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    mesh_dir.mkdir(parents=True, exist_ok=True)
+    summary = {}
+    for fid in fids:
+        print(f"\n--- part {fid} ---")
+        frame = load_frame(data_dir, fid)
+        cropped = [k for k, v in mask_touches_border(frame.mask).items() if v]
+        if cropped:
+            print(f"  NOTE: reaches the {', '.join(cropped)} border — cropped "
+                  f"there, so the outline says nothing about size on that side")
+        res = align_frame(frame, device=device, verbose=verbose)
+        print(f"  fit  {res.hypothesis}  {res.metrics.line()}")
+
+        mesh, T, metrics, girth = frame.mesh, res.T, res.metrics, 1.0
+        if girth_rounds > 0:
+            mesh, cal = calibrate_frame(frame, res.T, device=device,
+                                        rounds=girth_rounds)
+            T, metrics, girth = cal.T, cal.metrics_after, cal.factor
+            print(f"  girth x{girth:.3f}  (width {cal.width_before:.3f} -> "
+                  f"{cal.width_after:.3f})")
+        d = mesh_dir / f"part_{fid}"
+        d.mkdir(parents=True, exist_ok=True)
+        mesh.export(d / "mesh.glb")
+        src = _paths(data_dir, fid)
+        for key, name in [("rgb", "rgb.png"), ("masked", "rgb_masked.png"),
+                          ("depth", "depth.npy"), ("K", "intrinsic.npy")]:
+            link = d / name
+            if link.is_symlink() or link.exists():
+                link.unlink()
+            link.symlink_to(src[key].resolve())
+
+        R, t, s = geom.decompose(T)
+        np.savez(out_dir / f"pose_{fid}.npz", T=T, R=R, t=t, s=np.array(s),
+                 K=frame.K, fid=fid, girth_factor=np.array(girth),
+                 **{k: np.array(v) for k, v in metrics.as_dict().items()})
+        H, W = frame.shape
+        save_compare(out_dir / f"compare_{fid}.png", frame,
+                     MeshRenderer(mesh, frame.K, H, W, device=device), T, metrics,
+                     title=f"{res.hypothesis}  girth x{girth:.3f}")
+        summary[fid] = {"scale": s, "girth_factor": girth,
+                        "cropped_borders": cropped, **metrics.as_dict()}
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
+    return summary
 
 
-# auto_align_* first: the others import it by bare name.
-_load_local("auto_align_mesh_rgbd_scale_locked")
-align_run = _load_local("joint_two_part_align").run
-verify_run = _load_local("verify_joint_alignment").run
-part_dict_from_pose = _load_local("export_transforms_json").part_dict_from_pose
+# --------------------------------------------------------------------------
+# stage 2
+# --------------------------------------------------------------------------
+
+def fit_assembly(data_dir: Path, mesh_dir: Path, seed_dir: Path, cid: str,
+                 unit_ids: List[str], out_dir: Path, device: str,
+                 init_dir=None, init_cid=None,
+                 lock_scale: bool = True) -> Dict[str, np.ndarray]:
+    """The capture of the assembly comes from the original data; the meshes
+    placed into it come from stage 1, reshaped. Only the parts were fitted
+    there, so the assembly's own frame was never staged alongside them."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\n--- assembly {cid} <- units {unit_ids} ---")
+    frame = load_frame(data_dir, cid)
+    cropped = [k for k, v in mask_touches_border(frame.mask).items() if v]
+    if cropped:
+        print(f"  NOTE: reaches the {', '.join(cropped)} border")
+    H, W = frame.shape
+    units = [load_unit(mesh_dir, u.split("+"), seed_dir, device, frame.K, H, W,
+                       init_dir=init_dir, init_cid=init_cid) for u in unit_ids]
+    res = align_assembly(frame, units, device=device, lock_scale=lock_scale)
+
+    print(f"\n  UNION {res.metrics.line()}")
+    print(f"  JOINT  overlap {res.penetration_mm:.1f}mm   "
+          f"gap {res.joint_gap_mm:.1f}mm")
+    print(f"  RIMS   centres {res.rim_gap_mm:.1f}mm apart   "
+          f"radii differ {res.rim_radius_diff_mm:+.1f}mm   "
+          f"planes {res.rim_plane_deg:.2f}deg apart")
+    for r in res.units:
+        print("  " + r.line())
+        if r.occluded_frac > 0.85:
+            print(f"       WARNING: unit {r.name} is almost entirely hidden "
+                  f"here; its pose rests on priors, not on this capture")
+
+    Ts = [res.unit_poses[u.name] for u in units]
+    for u, T in zip(units, Ts):
+        for m in u.members:
+            Tm = res.poses[m.fid]
+            R, t, s = geom.decompose(Tm)
+            np.savez(out_dir / f"pose_{m.fid}_in_C{cid}.npz", T=Tm, R=R, t=t,
+                     s=np.array(s), K=frame.K, part_fid=m.fid, combined_fid=cid,
+                     unit=u.name)
+    save_assembly(out_dir / f"side_{cid}.png", frame, units, Ts, res.metrics)
+    pair = (choose_rim_pair(units, Ts)[:2]
+            if len(units) == 2 and all(u.rims for u in units) else None)
+    save_orbit_views(out_dir / f"views_{cid}.png", frame, units, Ts, pair)
+    (out_dir / "result.json").write_text(json.dumps({
+        "combined_fid": cid, "units": [u.name for u in units],
+        "order": res.order, "union": res.metrics.as_dict(),
+        "penetration_mm": res.penetration_mm, "joint_gap_mm": res.joint_gap_mm,
+        "rim_gap_mm": res.rim_gap_mm, "rim_plane_deg": res.rim_plane_deg,
+        "rim_radius_diff_mm": res.rim_radius_diff_mm,
+        "per_unit": [{"name": r.name, "occluded_frac": r.occluded_frac,
+                      "inside_mask_frac": r.inside_mask_frac,
+                      "tilt_deg": r.tilt_deg, "twist_deg": r.twist_deg,
+                      "yaw_held": r.yaw_held} for r in res.units],
+    }, indent=2, default=str))
+    return dict(res.unit_poses)
 
 
-# ----------------------------- stage 1: align -------------------------------
+# --------------------------------------------------------------------------
+# driver
+# --------------------------------------------------------------------------
 
-def stage_align(args, out_dir: Path) -> None:
-    ns = SimpleNamespace(
-        data_dir=args.data_dir,
-        combined_fid=args.combined_fid,
-        part_mesh_fids=args.part_mesh_fids,
-        combined_pose_npz=args.combined_pose_npz,
-        part_pose_npzs=args.part_pose_npzs,
-        output_dir=str(out_dir),
-        device=args.device,
-        # optimisation hyper-parameters (defaults mirror joint_two_part_align)
-        iters=args.iters,
-        lr=args.lr,
-        w_sil_region=args.w_sil_region,
-        w_sil_union=args.w_sil_union,
-        w_overlap=args.w_overlap,
-        w_scale_anchor=args.w_scale_anchor,
-        w_rot_anchor=args.w_rot_anchor,
-        w_contact=args.w_contact,
-        w_penetrate=args.w_penetrate,
-        force_upright_each_step=args.force_upright_each_step,
-        stack_refine_iters=args.stack_refine_iters,
-        w_stack=args.w_stack,
-        w_upright=args.w_upright,
-        yaw_screen_iters=args.yaw_screen_iters,
-        yaw_screen_candidates=args.yaw_screen_candidates,
-        soft_tau=args.soft_tau,
-        soft_sample_cap=args.soft_sample_cap,
-        upright_axis=args.upright_axis,
-    )
-    print("\n" + "=" * 70 + "\n[STAGE 1/3] JOINT ALIGNMENT\n" + "=" * 70)
-    align_run(ns)
-
-
-# ----------------------------- stage 2: verify ------------------------------
-
-def stage_verify(args, out_dir: Path) -> None:
-    ns = SimpleNamespace(
-        data_dir=args.data_dir,
-        combined_fid=args.combined_fid,
-        part_fids=args.part_mesh_fids,
-        joint_dir=str(out_dir),
-        combined_pose=args.combined_pose_npz,
-        output_dir=str(out_dir),
-        device=args.device,
-    )
-    print("\n" + "=" * 70 + "\n[STAGE 2/3] MULTI-VIEW VERIFICATION\n" + "=" * 70)
-    verify_run(ns)
-
-
-# ----------------------------- stage 3: export ------------------------------
-
-def stage_export(args, out_dir: Path, part_fids: list[str]) -> Path:
-    print("\n" + "=" * 70 + "\n[STAGE 3/3] EXPORT transforms.json\n" + "=" * 70)
-    cid = args.combined_fid
-    parts = []
-    for pf in part_fids:
-        npz_path = out_dir / f"pose_part_{pf}_in_C{cid}.npz"
-        if not npz_path.exists():
-            raise FileNotFoundError(
-                f"missing alignment pose {npz_path} -- run without "
-                f"--skip_align first")
-        d = np.load(npz_path, allow_pickle=True)
-        R = np.asarray(d["R"], dtype=np.float64)
-        t = np.asarray(d["t"], dtype=np.float64).reshape(3)
-        s = float(d["s"])
-        name = args.name_template.format(fid=pf, cid=cid)
-        part = part_dict_from_pose(
-            name, R, t, s,
-            target_frame=args.target_frame,
-            euler_order=args.euler_order,
-            include_quat=True,
-        )
-        parts.append(part)
-
-    out_path = out_dir / args.transforms_name
-    out_path.write_text(json.dumps({"parts": parts}, indent=2,
-                                   ensure_ascii=False))
-    print(f"[export] wrote {len(parts)} parts to {out_path} "
-          f"(frame={args.target_frame})")
-    for p in parts:
-        print(f"  {p['name']:>16}  t={[round(x, 4) for x in p['translation']]}  "
-              f"euler={[round(x, 2) for x in p['rotation_euler_degrees']]}  "
-              f"s={p['scale'][0]:.4f}")
-    return out_path
-
-
-# ----------------------------- driver ---------------------------------------
-
-def resolve_seeds(args) -> None:
-    """Fill combined_pose_npz / part_pose_npzs from --seed_dir when not
-    given explicitly."""
-    part_fids = [p.strip() for p in args.part_mesh_fids.split(",")]
-    if args.seed_dir:
-        seed = Path(args.seed_dir)
-        if args.combined_pose_npz is None:
-            cand = seed / f"pose_{args.combined_fid}.npz"
-            if cand.exists():
-                args.combined_pose_npz = str(cand)
-        if args.part_pose_npzs is None:
-            cands = [seed / f"pose_{pf}.npz" for pf in part_fids]
-            if all(c.exists() for c in cands):
-                args.part_pose_npzs = ",".join(str(c) for c in cands)
-    print(f"[seeds] combined_pose = {args.combined_pose_npz}")
-    print(f"[seeds] part_poses    = {args.part_pose_npzs}")
-
-
-def main():
-    ap = argparse.ArgumentParser(
-        description="Joint two-part alignment -> verification images -> "
-                    "transforms.json, in one command.")
-    # --- core io ---
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data_dir", required=True,
-                    help="frame data (rgb_/rgb_masked_/depth_/intrinsic_/mesh_)")
-    ap.add_argument("--combined_fid", required=True,
-                    help="combined frame id, e.g. '01' or '34'")
-    ap.add_argument("--part_mesh_fids", required=True,
-                    help="exactly two comma-separated part ids, e.g. '0,1'")
-    ap.add_argument("--output_dir", required=True,
-                    help="all pipeline artifacts land here")
+                    help="captures: <dir>/part_<fid>/{rgb,rgb_masked,depth,"
+                         "intrinsic,mesh}.* or <dir>/{rgb,...}_<fid>.*")
+    ap.add_argument("--parts", required=True,
+                    help="frame ids to fit in stage 1, e.g. '2,3,01'")
+    ap.add_argument("--assembly", action="append", required=True,
+                    metavar="CID:UNITS",
+                    help="an assembly capture and the units in it, e.g. "
+                         "'23:2,3' or '012:01,2'. Repeat for each assembly. "
+                         "Join a unit's parts with '+'.")
+    ap.add_argument("--order", default=None,
+                    help="unit order for mesh_0.glb, mesh_1.glb, … "
+                         "(default: first appearance)")
+    ap.add_argument("--output_dir", required=True)
     ap.add_argument("--device", default="cuda")
-    # --- seeds ---
-    ap.add_argument("--seed_dir", default=None,
-                    help="dir with single-frame pose_<id>.npz used to auto-fill "
-                         "--combined_pose_npz and --part_pose_npzs")
-    ap.add_argument("--combined_pose_npz", default=None,
-                    help="single-rigid pose of mesh_<cid>.glb (R/s seed + "
-                         "verify comparison). Overrides --seed_dir lookup.")
-    ap.add_argument("--part_pose_npzs", default=None,
-                    help="comma-separated 2 pose_<part>.npz (scale anchors + "
-                         "yaw seeds). Overrides --seed_dir lookup.")
-    # --- stage toggles ---
-    ap.add_argument("--skip_align", action="store_true")
-    ap.add_argument("--skip_verify", action="store_true")
-    ap.add_argument("--skip_export", action="store_true")
-    # --- transforms.json export options ---
-    ap.add_argument("--transforms_name", default="transforms.json")
-    ap.add_argument("--name_template", default="stage_{fid}_start",
-                    help="part name template; {fid}=part id, {cid}=combined id")
+    ap.add_argument("--girth_rounds", type=int, default=4,
+                    help="passes correcting each mesh's width; 0 leaves the "
+                         "reconstruction as it is")
+    ap.add_argument("--init_dir", default=None,
+                    help="earlier solve holding a multi-part unit's internals")
+    ap.add_argument("--init_cid", default=None)
     ap.add_argument("--target_frame", default="blender",
-                    choices=["opencv", "blender"],
-                    help="'blender' matches the metaobj_wrapper transforms.json")
+                    choices=["blender", "opencv"])
     ap.add_argument("--euler_order", default="xyz")
-    # --- alignment hyper-parameters (mirror joint_two_part_align defaults) ---
-    ap.add_argument("--iters", default=250, type=int)
-    ap.add_argument("--lr", default=0.005, type=float)
-    ap.add_argument("--w_sil_region", default=3.0, type=float)
-    ap.add_argument("--w_sil_union", default=1.0, type=float)
-    ap.add_argument("--w_overlap", default=2.0, type=float)
-    ap.add_argument("--w_scale_anchor", default=50.0, type=float)
-    ap.add_argument("--w_rot_anchor", default=0.5, type=float)
-    ap.add_argument("--w_contact", default=20.0, type=float)
-    ap.add_argument("--w_penetrate", default=200.0, type=float)
-    ap.add_argument("--force_upright_each_step", default=1, type=int)
-    ap.add_argument("--stack_refine_iters", default=80, type=int)
-    ap.add_argument("--w_stack", default=50.0, type=float)
-    ap.add_argument("--w_upright", default=20.0, type=float)
-    ap.add_argument("--yaw_screen_iters", default=30, type=int)
-    ap.add_argument("--yaw_screen_candidates", default="0,90,180,270")
-    ap.add_argument("--soft_tau", default=4.0, type=float)
-    ap.add_argument("--soft_sample_cap", default=4000, type=int)
-    ap.add_argument("--upright_axis", default="y")
+    ap.add_argument("--name_template", default="{unit}",
+                    help="part name in transforms.json; {unit} = unit id")
+    ap.add_argument("--skip_fit", action="store_true",
+                    help="reuse stage 1 output already in --output_dir")
     args = ap.parse_args()
 
-    part_fids = [p.strip() for p in args.part_mesh_fids.split(",")]
-    if len(part_fids) != 2:
-        ap.error("--part_mesh_fids must be exactly two ids, e.g. '0,1'")
+    out = Path(args.output_dir)
+    seed_dir, mesh_dir = out / "stage1", out / "stage1" / "meshes"
+    fids = [f.strip() for f in args.parts.split(",") if f.strip()]
 
-    out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    resolve_seeds(args)
+    assemblies = []
+    for spec in args.assembly:
+        if ":" not in spec:
+            ap.error(f"--assembly {spec!r} must look like 'CID:UNIT,UNIT'")
+        cid, units = spec.split(":", 1)
+        assemblies.append((cid.strip(),
+                           [u.strip() for u in units.split(",") if u.strip()]))
 
-    if not args.skip_align:
-        stage_align(args, out_dir)
+    print("=" * 70 + "\n[1/3] FIT EACH PART TO ITS OWN CAPTURE\n" + "=" * 70)
+    if args.skip_fit:
+        print("  reusing", seed_dir)
     else:
-        print("[skip] alignment (reusing existing pose_part_*.npz)")
+        fit_parts(Path(args.data_dir), fids, seed_dir, mesh_dir, args.device,
+                  args.girth_rounds)
 
-    if not args.skip_verify:
-        stage_verify(args, out_dir)
-    else:
-        print("[skip] verification views")
+    print("\n" + "=" * 70 + "\n[2/3] ASSEMBLE\n" + "=" * 70)
+    solves = [fit_assembly(Path(args.data_dir), mesh_dir, seed_dir, cid, units,
+                           out / f"C{cid}", args.device, args.init_dir,
+                           args.init_cid)
+              for cid, units in assemblies]
 
-    transforms_path = None
-    if not args.skip_export:
-        transforms_path = stage_export(args, out_dir, part_fids)
-    else:
-        print("[skip] transforms.json export")
+    print("\n" + "=" * 70 + "\n[3/3] HAND OVER TO metaobj_wrapper\n" + "=" * 70)
+    merged = chain_solves(solves)
+    order = ([u.strip() for u in args.order.split(",") if u.strip()]
+             if args.order else list(merged))
+    missing = [u for u in order if u not in merged]
+    if missing:
+        ap.error(f"--order names units that were never solved: {missing}")
 
-    # --- summary ---
-    print("\n" + "=" * 70 + "\n[PIPELINE DONE] artifacts in " + str(out_dir)
-          + "\n" + "=" * 70)
-    cid = args.combined_fid
-    expected = [
-        f"pose_part_{part_fids[0]}_in_C{cid}.npz",
-        f"pose_part_{part_fids[1]}_in_C{cid}.npz",
-        f"side_joint_{cid}.png",
-        f"depth_compare_{cid}.png",
-        f"verify_topdown_{cid}.png",
-        f"verify_sideview_{cid}.png",
-        f"verify_combined_{cid}.png",
-    ]
-    if transforms_path is not None:
-        expected.append(transforms_path.name)
-    for name in expected:
-        p = out_dir / name
-        flag = "ok " if p.exists() else "MISS"
-        print(f"  [{flag}] {name}")
+    inputs = out / "inputs"
+    stage_meshes(mesh_dir, order, inputs / "glbs")
+    try:
+        parts = write_transforms(
+            inputs / "transforms.json",
+            [(args.name_template.format(unit=u), merged[u]) for u in order],
+            target_frame=args.target_frame, euler_order=args.euler_order)
+    except NotASimilarity as exc:
+        print(f"\nERROR: {exc}", file=sys.stderr)
+        return 1
+
+    for i, (u, p) in enumerate(zip(order, parts)):
+        print(f"  mesh_{i}.glb  <- unit {u:>4}   "
+              f"t={[round(v, 4) for v in p['translation']]}  "
+              f"s={p['scale'][0]:.5f}")
+    print(f"\n  {inputs}/glbs/mesh_0..{len(order) - 1}.glb")
+    print(f"  {inputs}/transforms.json  ({len(parts)} parts, "
+          f"{args.target_frame} axes)")
+    print(f"\n  combine_rocket_glb.py expects exactly 5 parts; this run wrote "
+          f"{len(parts)}.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

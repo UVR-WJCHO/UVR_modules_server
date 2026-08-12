@@ -46,7 +46,6 @@ flag_behavior = False  # run behavior property estimation (GLB -> property JSON)
 # instead of using TRELLIS's own gaussian-baked texture. Requires flag_recon_mesh.
 flag_texpaint = False 
 
-
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
     """GLB 파일을 제공하는 커스텀 HTTP 핸들러"""
 

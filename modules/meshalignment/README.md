@@ -1,103 +1,79 @@
-# metaobj_alignment
+# meshalignment
 
-Joint two-part mesh alignment to a combined RGB-D frame, with multi-view
-verification and export to a `transforms.json` pose file.
+Fit reconstructed part meshes to RGB-D captures, place them into captures of
+the assembled object, and hand `metaobj_wrapper` the meshes and transforms it
+needs. Driven by `../modules_jointtrack.py`.
 
-Given one captured frame (RGB + depth + mask + intrinsics) of a two-part
-object and the two part meshes, the pipeline fits **both meshes
-simultaneously** so their union covers the object, renders verification
-views, and writes the per-part poses in the `transforms.json` format.
+## Two stages
 
-## Pipeline
+**Fit** (`solo.py`, `calibrate.py`) puts each mesh into the capture it was
+reconstructed from. Every orientation hypothesis is rendered and scored with
+the full objective, texture included — a part that is nearly a surface of
+revolution has almost no silhouette signal about its turn, so a screen that
+looks at geometry first ranks the right answer no higher than the wrong ones
+and drops it before texture is ever consulted.
 
-`run_joint_pipeline.py` runs three stages in one command:
+Girth is corrected here too. A reconstruction can come out the right length and
+the wrong width, and that is only unambiguous while the part is alone and fully
+in view. The correction scales distances from the part's central axis and
+leaves distances along it, then is baked into the mesh — so **the pose belongs
+to the corrected mesh in `<output>/stage1/meshes/`, not to the original.**
 
-| Stage | Module | Output |
-|-------|--------|--------|
-| 1. Align  | `joint_two_part_align.py` | `pose_part_<p>_in_C<cid>.npz` ×2, `side_joint_<cid>.png`, `depth_compare_<cid>.png`, `soft_assign_<cid>.png` |
-| 2. Verify | `verify_joint_alignment.py` | `verify_topdown_<cid>.png`, `verify_sideview_<cid>.png`, `verify_combined_<cid>.png` |
-| 3. Export | `export_transforms_json.py` (`part_dict_from_pose`) | `transforms.json` |
+**Assemble** (`joint.py`) places those parts into a capture of them joined.
+Parts are composited through a shared z-buffer before being compared, so each
+pixel is judged against whatever is actually visible there rather than against
+something hidden behind it. They go in one at a time, most visible first, each
+searched against the region the placed ones leave unexplained.
 
-`auto_align_mesh_rgbd_scale_locked.py` is the shared core (renderer, mask /
-intrinsics / table-normal helpers, similarity-transform utilities) that the
-alignment and verification stages build on.
+The search is confined to what the capture can decide: tipping away from the
+Stage 1 attitude is bounded, while turning about the part's own axis is not,
+and is held where Stage 1 put it when the shape cannot resolve it. Held turns
+are settled afterwards against the photograph alone, about the axis through the
+mating circle's centre, which leaves the joint untouched.
 
-```
-run_joint_pipeline.py
-├── joint_two_part_align.py ──┐
-├── verify_joint_alignment.py ┼──► auto_align_mesh_rgbd_scale_locked.py
-└── export_transforms_json.py    (no local deps)
-```
+## The joint
 
-## Install
+Parts of an assembly meet on circular faces, so the joint is a circle-to-circle
+registration (`geom.rim_circles`, `joint._rim_match`): the two mating circles
+have to become one, in centre, radius and plane. Seating, coaxiality and the
+step at the seam are then a single constraint instead of three soft penalties
+pulling against each other — which is what earlier attempts were, and they
+could not be balanced without one always winning.
 
-```bash
-python -m venv .venv && . .venv/Scripts/activate   # Windows
-# or: source .venv/bin/activate                     # Linux/mac
+Two details make it work. Faces that mate look at each other, so their outward
+normals oppose; that is what tells a top from a bottom, and without it a part
+that has slid inside its neighbour pairs the wrong ends and stays inside.
+And the weight is set so a millimetre of joint error costs what a millimetre of
+depth error costs — the circles cannot feel the assembly tipping toward the
+camera, and only depth can, so a joint term that outbids it walks the whole
+stack off the measurement.
 
-# Install a CUDA-matched torch first, then nvdiffrast (see requirements.txt):
-pip install torch --index-url https://download.pytorch.org/whl/cu128
-pip install git+https://github.com/NVlabs/nvdiffrast.git
-pip install -r requirements.txt
-```
+## Layout
 
-A CUDA GPU is required (nvdiffrast rasterization). Reference environment:
-torch 2.11.0+cu128, nvdiffrast 0.4.0, NVIDIA RTX A6000.
+    frames.py     loading, foreground, depth, support plane
+    geom.py       Sim(3), rotations, central axis, rim circles, symmetry
+    render.py     differentiable rasterisation (nvdiffrast)
+    score.py      the fit objective — screening and refining use the same one
+    sdf.py        per-mesh distance field, for shared-volume tests
+    solo.py       stage 1
+    calibrate.py  girth correction
+    joint.py      stage 2
+    assemble.py   chaining solves, transforms.json, staging the meshes
+    viz.py        result images
 
-## Usage
+## Input
 
-```bash
-python run_joint_pipeline.py \
-  --data_dir       path/to/frame_data \
-  --combined_fid   01 \
-  --part_mesh_fids 0,1 \
-  --seed_dir       path/to/single_frame_poses \
-  --output_dir     path/to/results_01 \
-  --device         cuda
-```
+Per frame id, either layout:
 
-`transforms.json` is written to `--output_dir` (alongside the verification
-images). Re-run a single stage with `--skip_align` / `--skip_verify` /
-`--skip_export`.
+    <data_dir>/part_<fid>/{rgb,rgb_masked,depth,intrinsic,mesh}.*
+    <data_dir>/{rgb,rgb_masked,depth,intrinsic,mesh}_<fid>.*
 
-### Expected input files (`--data_dir`)
+`rgb_masked` may attenuate the background rather than erase it. The mask reads
+that by comparing against `rgb` — background keeps a fraction of its brightness,
+foreground is untouched — and recovers parts of the object that are genuinely
+black, which carry no evidence either way, by depth. A brightness threshold
+alone discards them silently, and if such a region reaches the silhouette
+boundary, hole-filling cannot put it back.
 
-Per frame id `<fid>` (both the combined id and each part id):
-
-- `rgb_<fid>.png` — colour image
-- `rgb_masked_<fid>.png` — foreground mask source
-- `depth_<fid>.npy` — metric depth (float32, metres)
-- `intrinsic_<fid>.npy` — camera intrinsics
-- `mesh_<fid>.glb` — mesh (part meshes, and `mesh_<cid>.glb` for the
-  combined-mesh comparison in stage 2)
-
-`--seed_dir` supplies single-frame seed poses `pose_<id>.npz` (combined-frame
-pose = R/s seed + verify comparison; per-part poses = scale anchors + yaw
-seeds). Override explicitly with `--combined_pose_npz` / `--part_pose_npzs`.
-
-## transforms.json format
-
-One entry per part, in Blender world frame (camera at origin) by default:
-
-```json
-{
-  "parts": [
-    {
-      "name": "stage_0_start",
-      "translation": [x, y, z],
-      "rotation_euler_degrees": [rx, ry, rz],
-      "rotation_quaternion": [w, x, y, z],
-      "scale": [s, s, s]
-    }
-  ]
-}
-```
-
-Use `--target_frame opencv` to keep poses in the camera frame,
-`--name_template` to change part names (default `stage_{fid}_start`).
-
-## Note on paths
-
-The stage modules add the project directory to `sys.path` so the sibling
-imports resolve. Run commands from the repository root (or keep all five
-`.py` files in the same directory).
+Needs a CUDA GPU. `ninja` must be on PATH or nvdiffrast cannot build its
+kernels and silently falls back.

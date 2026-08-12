@@ -75,9 +75,9 @@
 | 파일 | 위치 | 크기 | 소비 |
 |---|---|---|---|
 | `checkpoint.pth` | `modules/handtracker/checkpoint/SAR_AGCN4_cross_wBGaug_extraTrue_resnet34_s0_Epochs50/` | 675 MB | SARTE `HandTracker_our` ([config.py:15](modules/handtracker/config.py#L15)) |
-| `wilor_final.ckpt` | `pretrained/handtracker_wilor/` | 2.4 GB | WiLoR `HandTracker_our_wilor` ([module_WILOR.py:75](modules/handtracker_wilor/module_WILOR.py#L75)) |
-| `model_config.yaml` | `pretrained/handtracker_wilor/` | 2 KB | WiLoR 모델 config ([module_WILOR.py:76](modules/handtracker_wilor/module_WILOR.py#L76)) |
-| `detector.pt` | `pretrained/handtracker_wilor/` | 52 MB | WiLoR 손 검출 ([module_WILOR.py:79](modules/handtracker_wilor/module_WILOR.py#L79)) |
+| `wilor_final.ckpt` | `_legacy/pretrained/handtracker_wilor/` | 2.4 GB | WiLoR `HandTracker_our_wilor` ([module_WILOR.py:75](_legacy/handtracker_wilor/module_WILOR.py#L75)) |
+| `model_config.yaml` | `_legacy/pretrained/handtracker_wilor/` | 2 KB | WiLoR 모델 config ([module_WILOR.py:76](_legacy/handtracker_wilor/module_WILOR.py#L76)) |
+| `detector.pt` | `_legacy/pretrained/handtracker_wilor/` | 52 MB | WiLoR 손 검출 ([module_WILOR.py:79](_legacy/handtracker_wilor/module_WILOR.py#L79)) |
 
 ### ONNX 변형 (WILOR-ONNX, `main_handtrack.py` v3) — `pretrained/handtracker_onnx/`
 
@@ -95,7 +95,7 @@
 | 파일 | 위치 | 크기 |
 |---|---|---|
 | `MANO_RIGHT.pkl`, `MANO_LEFT.pkl` | `modules/handtracker/mano_data/mano/models/` | 3.7 MB each |
-| `MANO_RIGHT.pkl` (+ `mano_mean_params.npz`) | `pretrained/handtracker_wilor/mano_data/` | 3.7 MB |
+| `MANO_RIGHT.pkl` (+ `mano_mean_params.npz`) | `_legacy/pretrained/handtracker_wilor/mano_data/` | 3.7 MB |
 
 > 출처: WiLoR (공식 릴리스), MANO (`mano.is.tue.mpg.de`, 라이선스 동의 필요).
 
@@ -128,8 +128,7 @@ pretrained/*
 modules/segmentor/sam2_realtime/checkpoints/*
 modules/segmentor/100DOH_small.pt
 modules/handtracker/checkpoint/*
-modules/handtracker_wilor/pretrained_models/*
-modules/handtracker_wilor/mano_data/*
+_legacy/handtracker_wilor/mano_data/*
 modules/gestureclassifier/checkpoints/*
 modules/behavior/vlm_input/
 modules/behavior/data/

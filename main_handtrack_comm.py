@@ -62,7 +62,7 @@ PV_HEIGHT = 360
 DEPTH_MAX_MM = 4000.0  # depth 표시 정규화용
 # aligned depth 는 손목 '표면'을 찍지만 실제 wrist 관절은 그보다 안쪽(카메라에서 더 멂).
 # 표면 depth 에 이 값을 더해 관절 중심 쪽으로 보정(~손목 두께 절반). 튜닝 가능.
-WRIST_DEPTH_OFFSET_MM = 10.0
+WRIST_DEPTH_OFFSET_MM = 13.0
 
 # Depth image processing frequency
 NUM_DEPTH_COUNT = 10  # Process depth once every N RGB frames
@@ -228,35 +228,16 @@ def main():
     args = ap.parse_args()
 
     # 무거운 모델 import 는 여기서 (모듈 import 를 가볍게 유지 -> comm 계층 테스트 가능)
-    import keyboard
-    from modules_hand import HandTracker_our, HandTracker_our_wilor, HandTracker_onnx
+    from modules_hand import HandTracker_onnx
     from modules_gesture import GestureClassfier
     from modules_obj import ObjTracker
     from visualize import draw_2d_skeleton   # _utils/visualize.py
 
     # 1. Initialize Models
     try:
-        hand_trackers = []
-        hand_model_names = []
-        # v1: SARTE. weights(MANO 등) 없으면 skip (v3 처럼 optional) -> v2 로 계속
-        try:
-            hand_trackers.append(HandTracker_our())
-            hand_model_names.append('v1 (SARTE)')
-        except Exception as e:
-            print(f"[HandTracker_our] unavailable, skipping v1: {e}")
-        # v2: WILOR (기본)
-        hand_trackers.append(HandTracker_our_wilor())
-        hand_model_names.append('v2 (WILOR)')
-        # v3: ONNX WILOR (optional)
-        try:
-            track_hand_v3 = HandTracker_onnx()
-            track_hand_v3.warmup(np.zeros((PV_HEIGHT, PV_WIDTH, 3), dtype=np.uint8))
-            hand_trackers.append(track_hand_v3)
-            hand_model_names.append('v3 (WILOR-ONNX)')
-        except Exception as e:
-            print(f"[HandTracker_onnx] unavailable, skipping v3: {e}")
+        hand_tracker = HandTracker_onnx()   # WILOR-ONNX
+        hand_tracker.warmup(np.zeros((PV_HEIGHT, PV_WIDTH, 3), dtype=np.uint8))
 
-        hand_model_idx = hand_model_names.index('v2 (WILOR)')  # Start with v2
         track_gesture = GestureClassfier(
             ckpt=f"./pretrained/{GESTURE_CKPT_FILE}",
             seq_len=SEQ_LEN, model_opt=1) if FLAG_GESTURE else None
@@ -284,21 +265,8 @@ def main():
     debug_pose = np.ones((21, 3))
     last_wrist_mm = None   # 직전 성공한 wrist depth(mm) — 샘플 실패 시 폴백
 
-    # keyboard 단축키(space=모델 전환)는 리눅스에서 root 권한 필요 -> 없으면 비활성화
-    try:
-        keyboard.is_pressed('space')
-        kb_ok = True
-    except Exception as e:
-        kb_ok = False
-        print(f"[keyboard] 단축키(space) 비활성화 - root 필요?: {e}")
-
     try:
         while True:
-            current_hand_tracker = hand_trackers[hand_model_idx]
-            if kb_ok and keyboard.is_pressed('space'):
-                hand_model_idx = (hand_model_idx + 1) % len(hand_trackers)
-                print(f"Hand model switched to {hand_model_names[hand_model_idx]}")
-
             idx_depth = (idx_depth + 1) % (NUM_DEPTH_COUNT + 1)
             flag_depth = (NUM_DEPTH_COUNT > 0 and idx_depth == 0)
 
@@ -314,6 +282,7 @@ def main():
                 continue
             depth = decode_depth_m(pkt.depth_data, PV_WIDTH, PV_HEIGHT) if flag_depth else None
             depth_mm = decode_depth_aligned_mm(pkt.depth_data)   # lift 용 (native PV 해상도, mm)
+         
 
             cv2.imshow('RGB', color)
             if FLAG_VISUALIZE_DEPTH and depth is not None:
@@ -322,8 +291,9 @@ def main():
 
             color_resized = cv2.resize(color, dsize=(PV_WIDTH, PV_HEIGHT), interpolation=cv2.INTER_AREA)
 
+
             # 6. Hand
-            outs = current_hand_tracker.run(np.copy(color_resized))  # uvd_right
+            outs = hand_tracker.run(np.copy(color_resized))  # uvd_right
             if not isinstance(outs, np.ndarray):
                 valid_gesture = None
                 valid_gesture_idx = -1

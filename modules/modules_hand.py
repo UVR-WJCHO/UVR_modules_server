@@ -11,22 +11,10 @@ from collections import deque
 from enum import Enum, IntEnum
 import copy
 
-from handtracker.module_SARTE import HandTracker
-from handtracker_wilor.module_WILOR import HandTracker_wilor
-
-
-class HandTracker_our_wilor():
-    def __init__(self):
-        self.model_hand = HandTracker_wilor()
-
-    def run(self, input):
-        return self.model_hand.run(input)
-
-
 class HandTracker_onnx():
     # ONNX-based WILOR hand tracker. onnxruntime is imported lazily inside
     # __init__ so importing this module stays cheap for users of the other
-    # trackers (SARTE / mediapipe / WILOR-torch).
+    # trackers (mediapipe).
     def __init__(self, **kwargs):
         from handtracker_onnx import WilorHandTrackerONNX
         self.model_hand = WilorHandTrackerONNX(**kwargs)
@@ -41,19 +29,9 @@ class HandTracker_onnx():
         if result is None:
             return None
         joints_2d = result['joints_2d']       # (21, 2) pixel coords
-        z = result['joints_3d'][:, 2:3]        # (21, 1) wrist-relative depth
+        # joints_3d 는 metre. 다른 tracker 들은 z 를 mm 로 돌려주므로 맞춰준다.
+        z = result['joints_3d'][:, 2:3] * 1000.0   # (21, 1) wrist-relative depth, mm
         return np.concatenate([joints_2d, z], axis=1)
-
-
-
-class HandTracker_our():
-    def __init__(self):
-        self.track_hand = HandTracker()
-
-    def run(self, input):
-        result_hand = self.track_hand.Process_single_newroi(input)
-
-        return result_hand
 
 
 class HandTracker_mp():

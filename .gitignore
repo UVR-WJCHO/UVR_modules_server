@@ -7,14 +7,12 @@ output/*
 pretrained/*
 !pretrained/.gitkeep
 
-modules/handtracker/checkpoint/*
-modules/handtracker_wilor/pretrained_models/*
+_legacy/
 
 modules/segmentor/sam2_realtime/checkpoints/*
 modules/segmentor/100DOH_small.pt
 
 modules/gestureclassifier/checkpoints/*
-modules/handtracker_wilor/mano_data/*
 
 modules/behavior/vlm_input/
 modules/behavior/data/

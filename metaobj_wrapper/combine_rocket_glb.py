@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Combine five GLB parts into one transformed rocket GLB.
+"""Combine GLB parts into one transformed rocket GLB.
 
 Default usage is intentionally hardcoded:
 
@@ -15,6 +15,10 @@ It reads:
 
 and writes:
     - outputs/rocket.glb
+
+The part count is whatever `--parts` and the transform JSON agree on; the five
+files above are only the default. `modules_jointtrack.py` writes one transform
+per unit, so a run with three units combines three parts.
 """
 
 from __future__ import annotations
@@ -49,7 +53,10 @@ DEFAULT_METADATA_OUTPUT_FILE = f"outputs/{ROOT_NODE_NAME}_metadata.json"
 # writes glTF Y-up coordinates, so Blender (x, y, z) becomes glTF (x, z, -y).
 TRANSFORM_COORDINATE_SYSTEM = "blender"
 
-PART_TRANSFORM_INDEXES: list[int | None] = [0, 1, 2, 3, 4]
+# Which transform each part file takes, by index into the transform JSON. None
+# leaves that part at identity. Empty means "one transform per part, in order",
+# which is what a run with an arbitrary number of units produces.
+PART_TRANSFORM_INDEXES: list[int | None] = []
 
 # Default properties written for every part before the optional extra properties.
 PART_METADATA_BASE_PROPERTIES: dict[str, Any] = {
@@ -215,19 +222,18 @@ def load_part_specs(transform_json: Path) -> list[dict[str, Any]]:
     else:
         raise ValueError("transform JSON must be a list or an object with a 'parts' list")
 
-    if len(parts) != 5:
-        raise ValueError(f"expected exactly 5 part transforms, got {len(parts)}")
+    if not parts:
+        raise ValueError("transform JSON contains no part transforms")
     if not all(isinstance(part, dict) for part in parts):
         raise ValueError("every part transform must be an object")
     return parts
 
 
 def specs_for_parts(part_specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if len(PART_TRANSFORM_INDEXES) != 5:
-        raise ValueError("PART_TRANSFORM_INDEXES must contain exactly 5 items")
+    indexes = PART_TRANSFORM_INDEXES or list(range(len(part_specs)))
 
     specs: list[dict[str, Any]] = []
-    for index in PART_TRANSFORM_INDEXES:
+    for index in indexes:
         if index is None:
             specs.append({"name": "identity", "matrix": np.eye(4).tolist()})
             continue
@@ -627,8 +633,8 @@ def add_test_like_mesh_attributes(path: Path) -> None:
 
 
 def combine_parts(part_files: list[Path], part_specs: list[dict[str, Any]], output_file: Path) -> None:
-    if len(part_files) != 5:
-        raise ValueError(f"expected exactly 5 GLB files, got {len(part_files)}")
+    if len(part_files) != len(part_specs):
+        raise ValueError(f"{len(part_files)} GLB files but {len(part_specs)} transforms")
 
     combined = trimesh.Scene()
     for index, (part_file, spec) in enumerate(zip(part_files, part_specs), start=1):
@@ -643,7 +649,8 @@ def combine_parts(part_files: list[Path], part_specs: list[dict[str, Any]], outp
             mesh_name = f"{part_name}_{mesh_index:02d}"
             combined.add_geometry(mesh, geom_name=mesh_name, node_name=mesh_name, transform=transform)
 
-        print(f"[{index}/5] added {part_file} as {part_name} ({len(nodes)} mesh item(s))")
+        print(f"[{index}/{len(part_files)}] added {part_file} as {part_name} "
+              f"({len(nodes)} mesh item(s))")
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     combined.export(output_file)
@@ -694,13 +701,13 @@ def write_metadata_json(output_file: Path, part_specs: list[dict[str, Any]]) -> 
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Transform and combine five GLB files into one GLB.")
+    parser = argparse.ArgumentParser(description="Transform and combine GLB parts into one GLB.")
     parser.add_argument(
         "--parts",
-        nargs=5,
+        nargs="+",
         default=DEFAULT_PART_FILES,
-        metavar=("PART_01", "PART_02", "PART_03", "PART_04", "PART_05"),
-        help="five input GLB paths, in order",
+        metavar="PART",
+        help="input GLB paths, in order; one per transform in the transform JSON",
     )
     parser.add_argument(
         "--transforms",

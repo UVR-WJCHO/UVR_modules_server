@@ -71,3 +71,17 @@ message ServerResult {
                                      //   server-lifted: real wrist depth from aligned depth + root-rel z
   int32  gesture_idx = 8;            // -1 = none (bonus; HL2 maps idx->name)
 }
+
+// Server -> HL2 reconstructed object (comm_hub UPLOAD, kw=MESH_RESULT).
+// One message carries the whole finished object: the units reconstructed from
+// the part captures, already placed by the alignment solve and merged into a
+// single GLB. There is nothing left for HL2 to assemble — load `glb` and show
+// it. Sent once per alignment run, not per frame.
+message MeshResult {
+  bytes  glb            = 1;   // the combined object, binary .glb
+  int32  part_count     = 2;   // units merged into it
+  repeated string part_names = 3;   // unit id per part, in mesh_0..mesh_N order
+  string metadata_json  = 4;   // per-part properties (objectName, colorHex, material, ...)
+                               //   same content combine_rocket_glb writes next to the GLB
+  float  timestamp      = 5;   // seconds since the server started, when the run finished
+}

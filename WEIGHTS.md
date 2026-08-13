@@ -8,7 +8,7 @@
 
 ## 1. Mesh Reconstruction (TRELLIS) — `pretrained/meshrecon/`
 
-소비: [modules/modules_mesh.py](modules/modules_mesh.py) `MeshReconstructor` → 진입점 `main_meshrecon.py`, `main_meshrecon_webcam.py`
+소비: [modules/modules_mesh.py](modules/modules_mesh.py) `MeshReconstructor` → 진입점 `main_meshrecon_comm.py`
 로딩: `TrellisImageTo3DPipeline.from_pretrained("pretrained/meshrecon/diffusion")` → `diffusion/pipeline.json`이 아래 파일들을 참조
 
 ### 1-1. 커스텀 학습 가중치 — `pretrained/meshrecon/diffusion/ckpts_new/`
@@ -41,7 +41,7 @@
 | 파일 | 크기 | 소비 | 코드 |
 |---|---|---|---|
 | `yolo_100doh_best.pt` | 20 MB | HoTrack 손-객체 검출 | [modules_hotrack.py:106](modules/modules_hotrack.py#L106) (`InteractiveHoTrackSegmentor`) |
-| `yolo11m.pt` | 39 MB | 객체 검출 `ObjTracker` | [modules_obj.py:16](modules/modules_obj.py#L16) (→ `main_handtrack.py`) |
+| `yolo11m.pt` | 39 MB | 객체 검출 `ObjTracker` | [modules_obj.py:16](modules/modules_obj.py#L16) (→ `main_handtrack_comm.py`) |
 | `yolo11n.pt` | 5.4 MB | (현재 미사용) | — |
 
 > 출처: Ultralytics YOLO11 (`yolo11m.pt`, `yolo11n.pt`). `yolo_100doh_best.pt`는 100DOH 기반 커스텀 학습본.
@@ -70,18 +70,18 @@
 
 ## 4. Hand Tracking — `modules/handtracker*/`
 
-진입점: `main_handtrack.py` ([modules_hand.py](modules/modules_hand.py))
+진입점: `_legacy/main_handtrack.py` ([_legacy/](_legacy/)) — v1/v2 는 은퇴했다
 
 | 파일 | 위치 | 크기 | 소비 |
 |---|---|---|---|
-| `checkpoint.pth` | `modules/handtracker/checkpoint/SAR_AGCN4_cross_wBGaug_extraTrue_resnet34_s0_Epochs50/` | 675 MB | SARTE `HandTracker_our` ([config.py:15](modules/handtracker/config.py#L15)) |
+| `checkpoint.pth` | `_legacy/handtracker/checkpoint/SAR_AGCN4_cross_wBGaug_extraTrue_resnet34_s0_Epochs50/` | 675 MB | SARTE `HandTracker_our` ([config.py:15](_legacy/handtracker/config.py#L15)) |
 | `wilor_final.ckpt` | `_legacy/pretrained/handtracker_wilor/` | 2.4 GB | WiLoR `HandTracker_our_wilor` ([module_WILOR.py:75](_legacy/handtracker_wilor/module_WILOR.py#L75)) |
 | `model_config.yaml` | `_legacy/pretrained/handtracker_wilor/` | 2 KB | WiLoR 모델 config ([module_WILOR.py:76](_legacy/handtracker_wilor/module_WILOR.py#L76)) |
 | `detector.pt` | `_legacy/pretrained/handtracker_wilor/` | 52 MB | WiLoR 손 검출 ([module_WILOR.py:79](_legacy/handtracker_wilor/module_WILOR.py#L79)) |
 
-### ONNX 변형 (WILOR-ONNX, `main_handtrack.py` v3) — `pretrained/handtracker_onnx/`
+### WILOR-ONNX (현재 유일한 hand tracker) — `pretrained/handtracker_onnx/`
 
-소비: [modules_hand.py](modules/modules_hand.py) `HandTracker_onnx` → `modules/handtracker_onnx/` (self-contained; ONNXRuntime + YOLO). `main_handtrack.py`에서 space 키로 v3 선택. 경로는 `WilorHandTrackerONNX(onnx_path=..., detector_path=...)` 인자로 오버라이드 가능.
+소비: [modules_hand.py](modules/modules_hand.py) `HandTracker_onnx` → `modules/handtracker_onnx/` (self-contained; ONNXRuntime + YOLO). 경로는 `WilorHandTrackerONNX(onnx_path=..., detector_path=...)` 인자로 오버라이드 가능.
 
 | 파일 | 위치 | 크기 | 비고 |
 |---|---|---|---|
@@ -105,7 +105,7 @@
 
 | 파일 | 크기 | 소비 |
 |---|---|---|
-| `checkpoint-40.tar` | 13 MB | `GestureClassfier` ([main_handtrack.py:62](main_handtrack.py#L62)) |
+| `checkpoint-40.tar` | 13 MB | `GestureClassfier` ([main_handtrack_comm.py:46](main_handtrack_comm.py#L46)) |
 
 ---
 

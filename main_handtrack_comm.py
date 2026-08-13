@@ -45,7 +45,7 @@ import hl2_data_pb2 as proto
 # --- CONFIGURATION ---
 GESTURE_CKPT_FILE = "gesture_checkpoint-40.tar"
 FLAG_INTERACTION_DETECT = False  # object-aware gesture detection
-FLAG_VISUALIZE_DEPTH = False     # True 면 Depth 창을 띄운다 (선택적 시각화)
+FLAG_VISUALIZE_DEPTH = True     # True 면 Depth 창을 띄운다 (선택적 시각화)
 FLAG_GESTURE = False              # True 면 gesture 인식 수행 (False 면 hand tracking 만)
 
 # comm_hub 브로커 접속
@@ -286,7 +286,10 @@ def main():
 
             cv2.imshow('RGB', color)
             if FLAG_VISUALIZE_DEPTH and depth is not None:
-                cv2.imshow('Depth', np.clip(depth / (DEPTH_MAX_MM / 1000.0), 0, 1))
+                depth_norm = np.clip(depth / (DEPTH_MAX_MM / 1000.0), 0, 1)
+                depth_vis = cv2.applyColorMap((depth_norm * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
+                depth_vis[depth <= 0] = 0   # 무효 depth 는 검정
+                cv2.imshow('Depth', depth_vis)
             cv2.waitKey(1)
 
             color_resized = cv2.resize(color, dsize=(PV_WIDTH, PV_HEIGHT), interpolation=cv2.INTER_AREA)

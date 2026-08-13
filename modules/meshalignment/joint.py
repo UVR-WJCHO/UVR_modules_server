@@ -213,7 +213,7 @@ def load_unit(data_dir, fids: Sequence[str], seed_dir, device: str, K, H: int, W
     members, pts = [], []
     for f, internal in zip(fids, internals):
         p = _paths(data_dir, f)
-        if p is None:
+        if p is None or "mesh" not in p:
             raise FileNotFoundError(f"part {f}: no mesh under {data_dir}")
         mesh = trimesh.load(p["mesh"], force="mesh")
         if isinstance(mesh, trimesh.Scene):

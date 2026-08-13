@@ -1,7 +1,8 @@
 """Frame loading and everything derived from a single capture.
 
-A capture is RGB + metric depth + a foreground-mask source + intrinsics + the
-mesh reconstructed for that frame. Two directory layouts are accepted:
+A capture is RGB + metric depth + a foreground-mask source + intrinsics, plus
+the mesh reconstructed for that frame when there is one — a capture of an
+assembly has none. Two directory layouts are accepted:
 
   nested :  <data_dir>/part_<fid>/{rgb,rgb_masked,depth,intrinsic,mesh}.*
   flat   :  <data_dir>/{rgb,rgb_masked,depth,intrinsic,mesh}_<fid>.*
@@ -33,19 +34,25 @@ DEPTH_MAX_M = 6.0
 # --------------------------------------------------------------------------
 
 def _paths(data_dir: Path, fid: str) -> Optional[Dict[str, Path]]:
-    """Resolve the five files for `fid` under either layout, or None."""
+    """Resolve the capture files for `fid` under either layout, or None.
+
+    The four measurement files are required. `mesh` is included only when it
+    exists: a capture of an assembly has no mesh of its own — the meshes placed
+    into it come from Stage 1 — so requiring one there would reject a frame
+    that is complete for what it is used for.
+    """
     nested = data_dir / f"part_{fid}"
     cands = [
-        {"rgb": nested / "rgb.png", "masked": nested / "rgb_masked.png",
-         "depth": nested / "depth.npy", "K": nested / "intrinsic.npy",
-         "mesh": nested / "mesh.glb"},
-        {"rgb": data_dir / f"rgb_{fid}.png", "masked": data_dir / f"rgb_masked_{fid}.png",
-         "depth": data_dir / f"depth_{fid}.npy", "K": data_dir / f"intrinsic_{fid}.npy",
-         "mesh": data_dir / f"mesh_{fid}.glb"},
+        ({"rgb": nested / "rgb.png", "masked": nested / "rgb_masked.png",
+          "depth": nested / "depth.npy", "K": nested / "intrinsic.npy"},
+         nested / "mesh.glb"),
+        ({"rgb": data_dir / f"rgb_{fid}.png", "masked": data_dir / f"rgb_masked_{fid}.png",
+          "depth": data_dir / f"depth_{fid}.npy", "K": data_dir / f"intrinsic_{fid}.npy"},
+         data_dir / f"mesh_{fid}.glb"),
     ]
-    for c in cands:
+    for c, mesh in cands:
         if all(p.exists() for p in c.values()):
-            return c
+            return {**c, "mesh": mesh} if mesh.exists() else dict(c)
     return None
 
 
@@ -278,7 +285,7 @@ class Frame:
     K: np.ndarray              # 3x3
     mask: np.ndarray           # HxW bool, foreground
     corr: np.ndarray           # HxW bool, depth trustworthy inside foreground
-    mesh: trimesh.Trimesh
+    mesh: Optional[trimesh.Trimesh]   # None for a capture of an assembly
     plane: Plane
 
     @property
@@ -289,7 +296,10 @@ class Frame:
         return backproject(self.depth, self.corr, self.K)
 
 
-def load_frame(data_dir: Path, fid: str, *, plane_seed: int = 0) -> Frame:
+def load_frame(data_dir: Path, fid: str, *, plane_seed: int = 0,
+               require_mesh: bool = True) -> Frame:
+    """`require_mesh=False` for a capture of an assembly, which has no mesh of
+    its own; `Frame.mesh` is then None and only the measurement is available."""
     p = _paths(Path(data_dir), fid)
     if p is None:
         raise FileNotFoundError(f"frame {fid!r}: incomplete file set under {data_dir}")
@@ -299,11 +309,15 @@ def load_frame(data_dir: Path, fid: str, *, plane_seed: int = 0) -> Frame:
     mask = foreground_mask(rgb, np.array(Image.open(p["masked"])), depth)
     if mask.shape != depth.shape:
         raise ValueError(f"frame {fid!r}: mask {mask.shape} != depth {depth.shape}")
-    mesh = trimesh.load(p["mesh"], force="mesh")
-    if isinstance(mesh, trimesh.Scene):
-        mesh = trimesh.util.concatenate(tuple(mesh.geometry.values()))
-    if not isinstance(mesh, trimesh.Trimesh):
-        raise ValueError(f"frame {fid!r}: {p['mesh']} did not load as a mesh")
+    mesh = None
+    if "mesh" in p:
+        mesh = trimesh.load(p["mesh"], force="mesh")
+        if isinstance(mesh, trimesh.Scene):
+            mesh = trimesh.util.concatenate(tuple(mesh.geometry.values()))
+        if not isinstance(mesh, trimesh.Trimesh):
+            raise ValueError(f"frame {fid!r}: {p['mesh']} did not load as a mesh")
+    elif require_mesh:
+        raise FileNotFoundError(f"frame {fid!r}: no mesh under {data_dir}")
     return Frame(
         fid=fid, rgb=rgb, depth=depth, K=K, mask=mask,
         corr=depth_correspondence_mask(depth, mask), mesh=mesh,

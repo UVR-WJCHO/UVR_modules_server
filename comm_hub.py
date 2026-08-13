@@ -2,13 +2,23 @@ import asyncio
 import zmq.asyncio
 import logging
 import argparse
+from collections import OrderedDict
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("CentralHub")
 
+# 스토리지 상한 (keyword 별로 따로 적용).
+# UPLOAD 는 저장 후 알림을 보내고, 구독자는 곧바로 DOWNLOAD 로 받아간다. 즉 오래된
+# 항목은 이미 받아갔거나 아무도 안 받아간 것이라 버려도 된다.
+# keyword 별로 나눈 이유: 수 MB 짜리 MESH_RESULT 하나가 30Hz 로 흐르는 HL2DATA 를
+# 밀어내 아직 다운로드 안 된 프레임을 지우는 일이 없어야 한다.
+DEFAULT_CACHE_ITEMS = 64        # keyword 당 보관 개수
+DEFAULT_CACHE_MB = 128          # keyword 당 보관 용량
+
 class RobustCentralHub:
-    def __init__(self, port: int):
+    def __init__(self, port: int, cache_items: int = DEFAULT_CACHE_ITEMS,
+                 cache_mb: float = DEFAULT_CACHE_MB):
         self.port = port
         self.context = zmq.asyncio.Context()
         self.socket = self.context.socket(zmq.ROUTER)
@@ -30,8 +40,35 @@ class RobustCentralHub:
         self.listeners = {}  # { "image": {id1, id2}, "seg_res": {id3} }
         self.src_to_id = {}  #{source : identity}
         self.source_to_kws = {}  # { source_b: {kw1, kw2, ...} }
-        #스토리지 초기화
+        #스토리지 초기화 (keyword -> OrderedDict{cache_key: data}, 오래된 것이 앞)
         self.storage = {}
+        self.cache_items = cache_items
+        self.cache_bytes = int(cache_mb * 1024 * 1024)
+        self.cache_size = {}      # keyword -> 현재 바이트 합
+        self.evicted = {}         # keyword -> 버린 개수 (누적)
+
+    def _store(self, kw_s: str, cache_key: str, data: bytes):
+        """저장하고 상한을 넘은 만큼 오래된 것부터 버린다."""
+        buf = self.storage.setdefault(kw_s, OrderedDict())
+        old = buf.pop(cache_key, None)
+        size = self.cache_size.get(kw_s, 0) - (len(old) if old is not None else 0)
+        buf[cache_key] = data
+        size += len(data)
+
+        n_dropped = 0
+        while buf and (len(buf) > self.cache_items or size > self.cache_bytes):
+            _, dropped = buf.popitem(last=False)
+            size -= len(dropped)
+            n_dropped += 1
+        self.cache_size[kw_s] = size
+
+        if n_dropped:
+            total = self.evicted.get(kw_s, 0) + n_dropped
+            self.evicted[kw_s] = total
+            # 매번 찍으면 30Hz 스트림에서 로그가 묻힌다. 처음과 이후 간헐적으로만.
+            if total == n_dropped or total % 500 < n_dropped:
+                logger.info(f"[EVICT] {kw_s}: dropped {total} total, "
+                            f"holding {len(buf)} items / {size / 1024 / 1024:.1f}MB")
 
     async def run(self):
         logger.info(f"[*] Robust Central Hub started on PORT: {self.port}")
@@ -119,7 +156,7 @@ class RobustCentralHub:
 
             # 데이터 저장 (나중에 DOWNLOAD 할 수 있도록)
             cache_key = f"{kw_s}_{source}_{fid.decode()}"
-            self.storage[cache_key] = data
+            self._store(kw_s, cache_key, data)
 
             # 알림 전송 (Fan-out)
             if kw_s in self.listeners:
@@ -157,10 +194,11 @@ class RobustCentralHub:
         elif action == b"DOWNLOAD":
             # 구조: [KW, Source, Target, FID]
             kw, source, fid = params
-            cache_key = f"{kw.decode()}_{source}_{fid.decode()}"
+            kw_s = kw.decode()
+            cache_key = f"{kw_s}_{source}_{fid.decode()}"
+            raw_data = self.storage.get(kw_s, {}).get(cache_key)
 
-            if cache_key in self.storage:
-                raw_data = self.storage[cache_key]
+            if raw_data is not None:
 
                 # 응답 패킷 구성: [요청자ID, Empty, DATA_REPLY, KW, Source, Target, FID, Data]
                 # 여기서 Source와 Target은 원본 데이터를 보존하여 전달합니다.
@@ -214,9 +252,14 @@ if __name__ == "__main__":
     # 커맨드라인 인자 처리
     parser = argparse.ArgumentParser(description="ZeroMQ Central Hub Server")
     parser.add_argument("--port", type=int, default=37001, help="Port to bind the server (default: 5555)")
+    parser.add_argument("--cache-items", type=int, default=DEFAULT_CACHE_ITEMS,
+                        help=f"keyword 당 보관 개수 (default: {DEFAULT_CACHE_ITEMS})")
+    parser.add_argument("--cache-mb", type=float, default=DEFAULT_CACHE_MB,
+                        help=f"keyword 당 보관 용량 MB (default: {DEFAULT_CACHE_MB})")
     args = parser.parse_args()
 
-    hub = RobustCentralHub(port=args.port)
+    hub = RobustCentralHub(port=args.port, cache_items=args.cache_items,
+                           cache_mb=args.cache_mb)
     try:
         asyncio.run(hub.run())
     except KeyboardInterrupt:

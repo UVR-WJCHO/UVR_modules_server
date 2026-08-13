@@ -120,7 +120,7 @@ def fit_assembly(data_dir: Path, mesh_dir: Path, seed_dir: Path, cid: str,
     there, so the assembly's own frame was never staged alongside them."""
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n--- assembly {cid} <- units {unit_ids} ---")
-    frame = load_frame(data_dir, cid)
+    frame = load_frame(data_dir, cid, require_mesh=False)
     cropped = [k for k, v in mask_touches_border(frame.mask).items() if v]
     if cropped:
         print(f"  NOTE: reaches the {', '.join(cropped)} border")

@@ -13,16 +13,16 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 
 ```
 .
-├── main_meshrecon.py          # Mesh reconstruction — HoloLens2 input
-├── main_meshrecon_webcam.py   # Mesh reconstruction — webcam input (color only)
-├── main_handtrack.py          # Hand tracking + gesture recognition — HoloLens2 input
-├── test_downloadMeshonHL2.py  # Utility / test script
+├── comm_hub.py                # ZeroMQ ROUTER broker — every entry point talks through this
+├── main_meshrecon_comm.py     # Capture → reconstruct → align → one combined GLB
+├── main_handtrack_comm.py     # Hand tracking + gesture recognition
+├── main_all_hl2_receiver.py   # HL2DATA viewer (RGB / depth / overlay)
 │
 ├── modules/
 │   ├── modules_mesh.py        # MeshReconstructor        (wraps meshrecon/ TRELLIS)
 │   ├── modules_segment.py     # HOSegmentor              (legacy depth-based, wraps segmentor/)
 │   ├── modules_hotrack.py     # InteractiveHoTrackSegmentor (wraps hotrack/ + segmentor SAM2)
-│   ├── modules_hand.py        # HandTracker_our / HandTracker_our_wilor
+│   ├── modules_hand.py        # HandTracker_onnx (WiLoR-ONNX)
 │   ├── modules_gesture.py     # GestureClassfier
 │   ├── modules_obj.py         # ObjTracker               (YOLO object detection)
 │   ├── modules_hl2.py         # Hl2Manager               (HoloLens2 streaming via hl2ss)
@@ -84,16 +84,21 @@ OPENAI_API_KEY=sk-...
 
 ## Entry Points
 
-### 1. Mesh reconstruction — HoloLens2 (`main_meshrecon.py`)
+### 1. Mesh reconstruction — HoloLens2 (`main_meshrecon_comm.py`)
 
-Streams RGB+depth from a HoloLens2, runs interactive hand–object segmentation, and
-reconstructs a 3D mesh of the held object on demand.
+Receives RGB+depth over `comm_hub`, runs interactive hand–object segmentation,
+reconstructs each part on demand, then aligns the parts and returns them as one
+combined GLB.
 
 ```bash
-python main_meshrecon.py
+python comm_hub.py --port 37001     # terminal 1
+python main_meshrecon_comm.py       # terminal 2
 ```
 
-Flow: HL2 frame → HoTrack segmentation → **press `Space`** → reconstruct mesh → save outputs → (optional) property JSON → UDP signal to HL2.
+Flow: HL2 frame → HoTrack segmentation → **`Space`** per unit → **`a`** per assembly
+→ **`Enter`** to align and combine → `UPLOAD kw=MESH_RESULT` back to HL2.
+
+The hl2ss-direct predecessor (`main_meshrecon.py`) is retired under `_legacy/`.
 
 Each capture is written to its own timestamped folder:
 
@@ -115,38 +120,38 @@ Toggles (top of the file):
 | `flag_interactive_hotrack` | `True` | `True` = HoTrack (color); `False` = legacy depth-based `HOSegmentor` |
 | `flag_behavior` | `False` | run behavior property estimation after each mesh |
 
-Set the HoloLens2 IP in `host` (default `192.168.50.137`). A GLB HTTP server runs on port `8000`.
+The combined GLB goes back through `comm_hub` as a `MeshResult` — no HTTP server,
+no UDP signal. See `_comm/README.md` for the transport.
 
-### 2. Mesh reconstruction — Webcam (`main_meshrecon_webcam.py`)
+### 2. Hand tracking & gesture — HoloLens2 (`main_handtrack_comm.py`)
 
-Same pipeline driven by a local webcam (color only — no depth/intrinsic, no HL2 UDP).
-Uses the color-only HoTrack path.
-
-```bash
-python main_meshrecon_webcam.py
-```
-
-Set `WEBCAM_INDEX` (default `0`) and `cam_width`/`cam_height` at the top of the file.
-Outputs `rgb.png`, `rgb_masked.png`, `mesh.glb` (+ `property.json`) under `output/<timestamp>/`.
-
-### 3. Hand tracking & gesture — HoloLens2 (`main_handtrack.py`)
-
-Streams RGB from a HoloLens2, estimates 3D hand pose, classifies gestures, and sends the
-pose + gesture back over UDP.
+Receives RGB+depth over `comm_hub`, estimates 3D hand pose, and returns absolute
+3D joints as a `ServerResult`.
 
 ```bash
-python main_handtrack.py
+python comm_hub.py --port 37001     # terminal 1
+python main_handtrack_comm.py       # terminal 2
 ```
 
-- Hand models: `HandTracker_our` (SARTE, v1) / `HandTracker_our_wilor` (WiLoR, v2) — toggle with `Space`.
-- Optional object-aware gesture gating: `FLAG_INTERACTION_DETECT`.
-- Set HL2 IP in `HOST` (default `192.168.50.31`), UDP port `5005`.
+- Hand model: `HandTracker_onnx` (WiLoR-ONNX). Needs `onnxruntime-gpu` for the CUDA provider.
+- Optional gesture recognition: `FLAG_GESTURE` (off by default).
+- The UDP predecessor (`main_handtrack.py`) is retired under `_legacy/`, along with
+  the SARTE (v1) and WiLoR-torch (v2) trackers.
+
+### 3. Viewing what HL2 sends (`main_all_hl2_receiver.py`)
+
+Subscribes to `HL2DATA` and shows RGB, aligned depth, and the overlay used to check
+their registration. Read-only — it produces nothing.
+
+```bash
+python main_all_hl2_receiver.py            # --no-gui for console only
+```
 
 ---
 
 ## Notes
 
-- **Input trigger:** the mesh pipelines read `Space` from stdin (terminal), so run them from a real terminal alongside the OpenCV windows.
+- **Input trigger:** the mesh pipeline reads `Space` / `a` / `Enter` from stdin (terminal), so run it from a real terminal alongside the OpenCV windows.
 - **GPU:** an NVIDIA GPU (CUDA 12.1) is required for TRELLIS, SAM2, and the hand/behavior models.
 - **HoloLens2 streaming** uses the vendored `_hl2ss/` library; calibration data lands in `_calibration/` on first connect.
 - See **[HOTRACK_STAGE1.md](HOTRACK_STAGE1.md)** for HoTrack controls, output layout, and `UVR_HOTRACK_*` tuning variables.

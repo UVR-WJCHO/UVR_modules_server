@@ -398,6 +398,13 @@ def main():
                     print("[Align] no assembly capture yet")
                     continue
                 print(f"\n[Align] units={units}  assemblies={[c for c, _ in assemblies]}")
+                # ENTER 를 치는 시점에는 완전히 조립된 물체가 카메라 앞에 있다.
+                # 그 프레임의 세그먼트 결과를 티저로 남긴다. 정합이 실패해도 남도록
+                # 먼저 저장한다.
+                teaser = session_dir / "teaser.png"
+                cv2.imwrite(str(teaser),
+                            np.where(obj_mask[..., None] == 1, color, 3))
+                print(f"[Teaser] {teaser}")
                 if meshrecon is not None:
                     meshrecon.pipeline.cpu()   # 정합이 쓸 VRAM 확보
                     clear_gpu_memory()

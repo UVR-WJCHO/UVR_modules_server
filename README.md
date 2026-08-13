@@ -43,7 +43,7 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 ├── metaobj_wrapper/           # mesh/glb wrapper assets
 ├── output/                    # pipeline outputs (git-ignored)
 │
-├── requirements.txt           # snapshot of the `metaobj` conda env
+├── requirements.txt           # legacy/bootstrap dependency snapshot
 ├── .env                       # API keys (OPENAI_API_KEY) — git-ignored
 ├── WEIGHTS.md                 # locations of all (git-ignored) model weights
 └── HOTRACK_STAGE1.md          # HoTrack controls / output layout / tuning env vars
@@ -53,17 +53,23 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 
 ## Environment Setup
 
-Tested with the **`metaobj`** conda environment: Python 3.10, CUDA 12.1, torch 2.4.0+cu121.
+The GPU pipelines run in the **`uvr_integ`** conda environment. The currently
+validated server environment is Python 3.10 with PyTorch 2.7.0+cu128.
 
 ```bash
-conda activate metaobj
-pip install -r requirements.txt
+conda activate uvr_integ
 ```
 
-`requirements.txt` already pins the CUDA-12.1 torch build and the pytorch3d prebuilt wheel
-(via `--extra-index-url` / `-f` lines at the top). A few packages must be installed manually
-(commented at the bottom of the file): `SAM-2` (in-repo, `pip install -e modules/segmentor/sam2_realtime`)
-and the PhysX-3D local source builds (`nvdiffrast`, `diff_gaussian_rasterization`, `diffoctreerast`).
+`requirements.txt` is an older Python-3.10/CUDA-12.1 bootstrap snapshot, not an
+exact export of the current `uvr_integ` environment. Do not replace a working
+`uvr_integ` environment with it blindly. A few packages still require local
+installation: `SAM-2` (in-repo, `pip install -e modules/segmentor/sam2_realtime`)
+and the PhysX-3D CUDA extensions (`nvdiffrast`,
+`diff_gaussian_rasterization`, `diffoctreerast`).
+
+The lightweight communication/viewer/recording tools can instead use the
+separate `wiseui_commu` environment described in `_comm/README.md`; the GPU
+algorithm entry points below must use `uvr_integ`.
 
 ### Model weights
 
@@ -91,6 +97,7 @@ reconstructs each part on demand, then aligns the parts and returns them as one
 combined GLB.
 
 ```bash
+conda activate uvr_integ
 python comm_hub.py --port 37001     # terminal 1
 python main_meshrecon_comm.py       # terminal 2
 ```
@@ -129,6 +136,7 @@ Receives RGB+depth over `comm_hub`, estimates 3D hand pose, and returns absolute
 3D joints as a `ServerResult`.
 
 ```bash
+conda activate uvr_integ
 python comm_hub.py --port 37001     # terminal 1
 python main_handtrack_comm.py       # terminal 2
 ```
@@ -152,6 +160,6 @@ python main_all_hl2_receiver.py            # --no-gui for console only
 ## Notes
 
 - **Input trigger:** the mesh pipeline reads `Space` / `a` / `Enter` from stdin (terminal), so run it from a real terminal alongside the OpenCV windows.
-- **GPU:** an NVIDIA GPU (CUDA 12.1) is required for TRELLIS, SAM2, and the hand/behavior models.
+- **GPU:** a CUDA-capable NVIDIA GPU is required for TRELLIS, SAM2, and the hand/behavior models. The current `uvr_integ` deployment uses PyTorch 2.7.0+cu128.
 - **HoloLens2 streaming** uses the vendored `_hl2ss/` library; calibration data lands in `_calibration/` on first connect.
 - See **[HOTRACK_STAGE1.md](HOTRACK_STAGE1.md)** for HoTrack controls, output layout, and `UVR_HOTRACK_*` tuning variables.

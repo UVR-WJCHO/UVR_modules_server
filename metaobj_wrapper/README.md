@@ -4,19 +4,12 @@
 
 ## Conda 환경
 
-이미 환경을 만든 경우:
+메인 서버에서 `main_meshrecon_comm.py`가 이 래퍼를 직접 import하므로,
+프로젝트의 GPU 실행 환경과 같은 `uvr_integ`를 사용합니다.
 
 ```bash
-cd /home/development/metaobj
-conda activate rocket_glb
-```
-
-환경이 없는 경우 한 번만 생성합니다.
-
-```bash
-cd /home/development/metaobj
-conda env create -f environment.yml
-conda activate rocket_glb
+cd <UVR_modules_server>/metaobj_wrapper
+conda activate uvr_integ
 ```
 
 ## 기본 입력

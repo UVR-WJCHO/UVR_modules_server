@@ -1,5 +1,9 @@
-# requirements.txt — snapshot of the `metaobj` conda env (Python 3.10, CUDA 12.1, torch 2.4.0+cu121)
-# Generated from `pip list --format=freeze`. Install with:  pip install -r requirements.txt
+# requirements.txt — legacy/bootstrap snapshot for the server stack
+#
+# The active, validated runtime is the `uvr_integ` conda environment. This file
+# preserves an older Python 3.10 / CUDA 12.1 / torch 2.4.0+cu121 dependency set;
+# it is not an exact export of the current deployed environment (torch 2.7.0+cu128).
+# Do not overwrite a working `uvr_integ` environment with it blindly.
 #
 # torch/torchvision/torchaudio use the +cu121 build; pytorch3d uses the FAIR prebuilt wheel.
 # The find-links / extra-index-url lines below make those resolvable.

@@ -71,4 +71,4 @@ python play_hl2.py walk1.hl2rec --host 143.248.96.81 --port 37001 --loop --speed
 1. 브로커 실행 (`WiseUIServer/`): `python comm_hub.py --port 37001`
 2. 홀로렌즈 접속 상태에서 녹화 (`WiseUIServer/tests/`): `python record_hl2.py walk1.hl2rec` → 움직이며 캡처 → `q`
 3. 나중에 기기 없이 재생 (`WiseUIServer/tests/`): `python play_hl2.py walk1.hl2rec --loop`
-4. 재생 확인용 뷰어 (`WiseUIServer/`): `python hl2_receiver.py --host <브로커IP> --port 37001`
+4. 재생 확인용 뷰어 (`WiseUIServer/`): `python main_all_hl2_receiver.py --host <브로커IP> --port 37001`

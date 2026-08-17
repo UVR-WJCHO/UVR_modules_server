@@ -123,8 +123,11 @@ class WilorHandTrackerONNX:
         self.detector = YOLO(detector_path)
 
     # -- internal helpers -----------------------------------------------------
-    def _preprocess_hand_patch(self, image, box):
+    def _preprocess_hand_patch(self, image, box, do_flip=False):
         # box: [x1, y1, x2, y2]
+        # do_flip: WILOR/MANO 는 오른손 전용 모델이다. 왼손은 패치를 좌우 반전해 넣고
+        #   출력의 x 를 다시 뒤집어야 한다 (process() 의 is_right==0 분기). 반전 없이
+        #   넣으면 왼손 결과가 무의미해진다.
         center = (box[2:4] + box[0:2]) / 2.0
         scale = self.rescale_factor * (box[2:4] - box[0:2]) / 200.0
         bbox_size = expand_to_aspect_ratio(scale * 200.0,
@@ -136,7 +139,7 @@ class WilorHandTrackerONNX:
             float(center[0]), float(center[1]),
             float(bbox_size), float(bbox_size),
             self.img_size, self.img_size,
-            False, 1.0, 0,
+            do_flip, 1.0, 0,
             border_mode=cv2.BORDER_CONSTANT,
         )
 
@@ -214,7 +217,7 @@ class WilorHandTrackerONNX:
         box = bboxes[chosen_idx]
         is_right = int(classes[chosen_idx])
 
-        patch, center, bbox_size = self._preprocess_hand_patch(frame, box)
+        patch, center, bbox_size = self._preprocess_hand_patch(frame, box, do_flip=(is_right == 0))
 
         outputs = self.session.run(None, {self.input_name: patch})
         pred_cam = outputs[0].astype(np.float32)

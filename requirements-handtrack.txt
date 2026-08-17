@@ -1,0 +1,52 @@
+# main_handtrack_comm.py — hand tracking over comm_hub
+#
+# Traced from the import chain, not guessed:
+#   main_handtrack_comm -> modules_hand (HandTracker_onnx) -> handtracker_onnx
+#                       -> modules_gesture -> gestureclassifier
+#                       -> modules_obj (YOLO)
+#                       -> _utils/visualize
+#   plus _comm/hl2_data_pb2 for the wire format.
+#
+# Verified against uvr_integ (RTX 5090, CUDA 12.8, Python 3.10), where every
+# module above imports and the tracker runs on the CUDA provider.
+#
+#   conda create -n uvr_handtrack python=3.10 && conda activate uvr_handtrack
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   pip install -r requirements-handtrack.txt
+#
+# torch is deliberately NOT pinned here: the wheel has to match your CUDA
+# toolkit, so install it first from the right index. 2.7.0+cu128 is what this
+# was verified on.
+
+# --- core ---
+numpy==2.0.1
+opencv-python==4.12.0.88
+pillow==10.4.0
+
+# --- comm_hub transport ---
+pyzmq==27.0.1
+protobuf==4.25.8            # _comm/hl2_data_pb2.py gencode
+
+# --- hand tracker (WiLoR-ONNX) ---
+# onnxruntime-gpu, NOT onnxruntime: the CPU build has no CUDAExecutionProvider
+# and module_wilor_onnx silently falls back to CPU. It finds cuDNN/cuBLAS
+# through the nvidia-* wheels torch installs, so import torch first.
+onnxruntime-gpu==1.22.0
+onnx==1.22.0
+ultralytics==8.3.203        # YOLO hand detector
+yacs==0.1.8                 # wilor_onnx_utils config
+
+# --- gesture classifier (FLAG_GESTURE; torch only beyond the above) ---
+# nothing extra
+
+# --- object-aware gating (FLAG_INTERACTION_DETECT) ---
+# modules_obj also uses ultralytics, already listed
+
+# --- visualization (_utils/visualize.py, imported unconditionally) ---
+matplotlib==3.10.5
+pyrender==0.1.45
+trimesh==4.7.4
+
+# --- modules_hand imports mediapipe at module level for HandTracker_mp ---
+# Unused by this entry point but the import runs, so it must be installed.
+mediapipe==0.10.14

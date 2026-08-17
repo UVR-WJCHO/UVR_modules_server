@@ -63,6 +63,10 @@ DEPTH_MAX_MM = 4000.0  # depth 표시 정규화용
 # aligned depth 는 손목 '표면'을 찍지만 실제 wrist 관절은 그보다 안쪽(카메라에서 더 멂).
 # 표면 depth 에 이 값을 더해 관절 중심 쪽으로 보정(~손목 두께 절반). 튜닝 가능.
 WRIST_DEPTH_OFFSET_MM = 13.0
+# depth 를 아직 한 번도 못 받았을 때 쓰는 손목 거리. 실측이 한 번이라도 들어오면
+# 그 값으로 대체되고 다시는 쓰이지 않는다 — 기동 직후 몇 프레임을 더미로 버리지
+# 않으려는 용도이지 측정값이 아니다.
+DEFAULT_WRIST_MM = 400.0
 
 # Depth image processing frequency
 NUM_DEPTH_COUNT = 10  # Process depth once every N RGB frames
@@ -184,18 +188,30 @@ def _sample_wrist_depth_mm(depth_mm, u, v, win=3):
     return best if best > 0 else None
 
 
-def lift_pose_cam3d(outs_uvd, depth_mm, fx, fy, cx, cy, wrist_mm_fallback=None):
-    """RGB uvd(21x3: u,v @640x360, z=root-relative mm) + aligned depth(mm, PV 해상도)
+def lift_pose_cam3d(outs_uvd, depth_mm, fx, fy, cx, cy, frame_wh, wrist_mm_fallback=None):
+    """RGB uvd(21x3: u,v @640x360, z=root-relative mm) + aligned depth(mm)
     -> absolute 21x3 xyz (meters, PV 카메라 프레임 = OpenCV: +X右 +Y下 +Z앞).
-    wrist(관절0) 픽셀의 aligned depth 로 실제 wrist depth 를 얻고, root-relative z 로 나머지를 lifting.
-    wrist depth 샘플 실패 시 wrist_mm_fallback(직전 취득값)으로 대체.
-    반환 (xyz 21x3 or None, fresh_wrist_mm or None). 둘 다 없으면 (None, None)."""
-    H, W = depth_mm.shape[:2]
-    sx = W / float(PV_WIDTH); sy = H / float(PV_HEIGHT)   # 640x360 -> PV 해상도로 환산
-    zw_fresh = _sample_wrist_depth_mm(depth_mm, outs_uvd[0, 0] * sx, outs_uvd[0, 1] * sy)
+
+    wrist(관절0) 픽셀의 aligned depth 로 실제 wrist depth 를 얻고, root-relative z 로
+    나머지를 lifting 한다. `depth_mm` 이 None 이거나(그 프레임에 depth 가 안 왔다)
+    손목 픽셀에 구멍이 나면 `wrist_mm_fallback`(직전 취득값)을, 그마저 없으면
+    `DEFAULT_WRIST_MM` 을 쓴다 — depth 유무와 무관하게 3D 를 돌려주기 위해서다.
+
+    `frame_wh` 는 intrinsics 가 정의된 해상도(=수신 RGB 크기). depth 는 다른 해상도로
+    올 수 있으므로 샘플링 좌표는 depth 자신의 크기로 따로 환산한다.
+    반환 (xyz 21x3 or None, fresh_wrist_mm or None)."""
+    W, H = frame_wh
+    sx = W / float(PV_WIDTH); sy = H / float(PV_HEIGHT)   # 640x360 -> intrinsics 해상도
+
+    zw_fresh = None
+    if depth_mm is not None:
+        dh, dw = depth_mm.shape[:2]
+        zw_fresh = _sample_wrist_depth_mm(depth_mm,
+                                          outs_uvd[0, 0] * dw / float(PV_WIDTH),
+                                          outs_uvd[0, 1] * dh / float(PV_HEIGHT))
     zw = zw_fresh if zw_fresh is not None else wrist_mm_fallback
     if zw is None:
-        return None, None
+        zw = DEFAULT_WRIST_MM   # 실측이 아직 없다 — 가정한 거리로라도 3D 를 만든다
     zc = zw + WRIST_DEPTH_OFFSET_MM   # 손목 표면 -> 관절 중심 보정
     out = np.zeros((21, 3), np.float32)
     for j in range(21):
@@ -365,13 +381,13 @@ def main():
             cv2.waitKey(1)
 
             # 11. 결과 return — aligned depth 로 lift 한 absolute 3D hand pose(메인) + gesture_idx(덤)
-            hand3d = None
-            if depth_mm is not None:
-                # wrist depth 샘플 실패 시 직전 취득값(last_wrist_mm)으로 폴백
-                hand3d, zw_fresh = lift_pose_cam3d(outs, depth_mm, pkt.fx, pkt.fy, pkt.cx, pkt.cy,
-                                                   last_wrist_mm)
-                if zw_fresh is not None:
-                    last_wrist_mm = zw_fresh   # 성공 시에만 갱신(스케일 drift 방지)
+            # depth 가 안 온 프레임이어도 직전 wrist depth 로 lift 한다. depth 유무가
+            # 리턴을 좌우하면 HL2 쪽에서 손이 끊겨 보인다.
+            hand3d, zw_fresh = lift_pose_cam3d(
+                outs, depth_mm, pkt.fx, pkt.fy, pkt.cx, pkt.cy,
+                (color.shape[1], color.shape[0]), last_wrist_mm)
+            if zw_fresh is not None:
+                last_wrist_mm = zw_fresh   # 실측했을 때만 갱신(스케일 drift 방지)
 
             if time.time() - t_cooldown > 0.5:
                 flag_cooldown = False
@@ -384,9 +400,9 @@ def main():
             else:
                 out_idx = -1
 
-            # lift 실패(손목 depth 없음) 시 더미(전부 1.0) = "유효하지 않음" 표시
-            hand_out = hand3d if hand3d is not None else debug_pose
-            hub.send_result(build_result(pkt, hand_out.flatten(), out_idx))
+            # 손을 찾은 프레임은 항상 3D 로 나간다. 더미(전부 1.0 = "유효하지 않음")는
+            # 손 미검출일 때만 쓴다.
+            hub.send_result(build_result(pkt, hand3d.flatten(), out_idx))
 
     except KeyboardInterrupt:
         pass

@@ -9,6 +9,9 @@ pretrained/*
 
 _legacy/
 
+# 연구용 소스/데이터는 전부 research/ 안에서만 관리하고 git 에는 넣지 않는다
+research/
+
 modules/segmentor/sam2_realtime/checkpoints/*
 modules/segmentor/100DOH_small.pt
 

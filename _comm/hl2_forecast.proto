@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+// Delay-conditioned hand forecast. 기존 hl2_data.proto 는 건드리지 않는다 —
+// 이 파일만 따로 생성해서 쓴다(계획서 §2.3 "독립 forecast packet").
+//
+//   protoc --python_out=. hl2_forecast.proto
+//   protoc --csharp_out=<dir> hl2_forecast.proto      # HMD 쪽도 같은 .proto 에서 생성
+//
+// comm_hub UPLOAD, kw = HAND_FORECAST.
+
+message HandForecast {
+  uint32 protocol_version = 1;
+
+  // --- 어느 프레임에서 나온 결과인가 ---
+  uint64 source_frame_id             = 2;
+  uint64 source_capture_timestamp_ns = 3;   // HL2 capture clock 기준
+  float  legacy_timestamp            = 4;   // HL2SensorPacket.timestamp echo (호환용)
+
+  // --- 서버 내부 구간. 기기 간 절대 시각을 빼면 안 되므로 참고용이다 ---
+  uint64 server_receive_timestamp_ns = 5;
+  uint64 inference_start_timestamp_ns = 6;
+  uint64 inference_end_timestamp_ns  = 7;
+  uint64 server_send_timestamp_ns    = 8;
+
+  // --- 어떤 손인가 ---
+  bool   valid       = 9;
+  string track_id    = 10;
+  Handedness handedness = 11;
+  CoordinateSpace coordinate_space = 12;   // 항상 IMAGE_25D
+
+  // --- forecast grid ---
+  // horizons_ms[i] 에 대응하는 pose 는 joints_25d[(i*63) : ((i+1)*63)] 이다.
+  // 관절당 (u_n, v_n, rel_z): 정규화 image 좌표 x/z, y/z (무차원) 와 손목 기준 상대
+  // depth (m). 손목의 rel_z 는 0 이다. 손목 절대 depth 는 보내지 않는다 — 기기가 정한다.
+  repeated float horizons_ms = 13;
+  repeated float joints_25d  = 14;         // H * 21 * 3
+
+  // 원래 anchor. 디버깅과 baseline 재현용으로 forecast 와 별도로 보관한다.
+  repeated float source_anchor_25d = 15;   // 21 * 3
+  InvalidReason invalid_reason = 16;
+  string model_version = 17;
+  uint32 history_length = 18;              // 실제로 쓴 history 프레임 수
+}
+
+enum Handedness {
+  HANDEDNESS_UNSPECIFIED = 0;
+  LEFT  = 1;
+  RIGHT = 2;
+}
+
+enum CoordinateSpace {
+  SPACE_UNSPECIFIED = 0;
+  IMAGE_25D = 3;            // (u_n, v_n, rel_z). 유일하게 쓰는 값이다
+}
+
+// all-ones dummy pose 로 무효를 표현하지 않는다 (계획서 §2.4).
+enum InvalidReason {
+  NONE                 = 0;
+  NO_DETECTION         = 1;
+  ROOT_DEPTH_FAILED    = 2;   // 더 이상 쓰지 않는다 (depth 미사용)
+  INSUFFICIENT_HISTORY = 3;
+  HISTORY_GAP          = 4;
+  TIMESTAMP_REGRESSED  = 5;
+  TRANSFORM_FAILED     = 6;   // 더 이상 쓰지 않는다 (cam_to_world 미사용)
+}

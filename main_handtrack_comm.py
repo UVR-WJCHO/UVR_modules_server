@@ -174,18 +174,20 @@ def decode_depth_aligned_mm(buf):
 
 
 def _sample_wrist_depth_mm(depth_mm, u, v, win=3):
-    """(u,v) 주변 window 의 유효(>0) depth 중 최근접(frontmost=손 표면) mm. 없으면 None."""
+    """(u,v) 주변 window 의 유효(>0) depth 중앙값 mm. 없으면 None.
+
+    최근접(min)을 쓰면 안 된다. 손목은 손과 배경의 경계에 있고 depth 센서는 경계에서
+    flying pixel 을 만드는데, min 은 그 한 픽셀에 값 전체가 끌려간다. HL2 기록에서
+    프레임간 손목 depth 가 최대 355 mm 뛰었다 — 중앙값은 1.0 mm 였다.
+    """
     H, W = depth_mm.shape[:2]
     u = int(round(u)); v = int(round(v))
-    best = 0
-    for dy in range(-win, win + 1):
-        for dx in range(-win, win + 1):
-            x, y = u + dx, v + dy
-            if 0 <= x < W and 0 <= y < H:
-                m = int(depth_mm[y, x])
-                if m > 0 and (best == 0 or m < best):
-                    best = m
-    return best if best > 0 else None
+    y0, y1 = max(v - win, 0), min(v + win + 1, H)
+    x0, x1 = max(u - win, 0), min(u + win + 1, W)
+    if y0 >= y1 or x0 >= x1:
+        return None                      # 손목이 이미지 밖이다
+    valid = depth_mm[y0:y1, x0:x1][depth_mm[y0:y1, x0:x1] > 0]
+    return float(np.median(valid)) if valid.size else None
 
 
 def lift_pose_cam3d(outs_uvd, depth_mm, fx, fy, cx, cy, frame_wh, wrist_mm_fallback=None):

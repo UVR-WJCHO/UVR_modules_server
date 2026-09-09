@@ -6,6 +6,8 @@ _calibration/rm_depth_ahat/*
 output/*
 pretrained/*
 !pretrained/.gitkeep
+# forecast 가중치는 1.7 MB 라 예외로 커밋한다
+!pretrained/forecast/
 
 _legacy/
 
@@ -19,3 +21,9 @@ modules/gestureclassifier/checkpoints/*
 
 modules/behavior/vlm_input/
 modules/behavior/data/
+
+# 학습 데이터·산출물 (parquet, checkpoint). 코드는 modules/delay_nowcasting/ 에 있다
+research_data/
+
+# 빌드 산출물
+*.so

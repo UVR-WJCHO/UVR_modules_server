@@ -1,0 +1,51 @@
+name: hot3d_v1
+
+dataset:
+  source_dataset: HOT3D
+  # canonical skeleton 은 cache 의 UmeTrack 21 landmark 가 아니라 raw 의 MANO parameter 에서
+  # 재생성한다. cache landmark 에는 thumb MCP 가 없고 PALM_CENTER 가 남아 canonical 21 과
+  # 1:1 대응되지 않기 때문 (2026-08-17 확인).
+  raw_root: /mnt/shared/dataset/HOT3D
+  cache_root: /mnt/shared/dataset/HOT3D_cache
+  sequence_list: /mnt/shared/dataset/HOT3D_cache/valid_sequences.txt
+  device_index: 0
+  mano_trajectory_file: mano_hand_pose_trajectory.jsonl
+  headset_trajectory_file: headset_trajectory.csv
+
+skeleton:
+  joint_map: mano_to_canonical
+  # 아래 값은 UmeTrack landmark 대조로 확정했다 (9 subject x 2 hand, 평균 6.8 mm,
+  # 차선 규약 39 mm). 재현: data/verify_hot3d.py
+  mano_model_path: pretrained/handtracker_onnx/mano_data
+  num_pca_comps: 15
+  flat_hand_mean: false
+  left_hand_from_mirrored_right: true   # MANO_LEFT.pkl 이 없어 mirroring. WiLoR ONNX 와 동일 방식
+  wrist_xform_convention: smplx_global_orient_transl   # world = R @ (J - J0) + J0 + t
+  landmark_agreement_tolerance_mm: 12.0   # sequence-hand 평균 잔차 상한
+
+units:
+  length: meter
+  time: nanosecond
+
+split:
+  name: hot3d_subject_v1
+  train: [P0001, P0002, P0003, P0009, P0010, P0011]
+  val: [P0012]
+  test: [P0014, P0015]
+
+window:
+  history_length: 8
+  max_history_gap_ms: 150      # 기준 stride 3(100ms) + 간헐 지연을 허용
+  history_max_stride: 2        # 기준 프레임률 하한 (30/2 = 15 fps)
+  history_min_fps: 15          # 15~30 fps 를 섞어 학습한다
+  horizon_tolerance_ms: 8.0
+  native_horizons_ms: [33, 66, 100, 133, 166, 199, 233, 266, 300]
+  # 30 fps 라 격자가 네이티브로 맞는다. 보간 horizon 을 두면 window 집합이
+  # 바뀌어 이미 보고한 수치와 어긋나므로 비워 둔다.
+  interpolated_horizons_ms: []
+
+evaluation:
+  # 0 은 sanity check 용 (horizon=0 에서 Hold 오차는 numerical zero 여야 한다)
+  horizons_ms: [0, 33, 66, 100, 133, 166, 199, 233, 266, 300]
+
+output_root: research_data

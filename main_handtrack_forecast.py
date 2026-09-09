@@ -38,12 +38,12 @@ sys.path.insert(0, os.path.join(_ROOT, "modules"))
 sys.path.insert(0, os.path.join(_ROOT, "_comm"))
 import hl2_data_pb2 as proto                     # noqa: E402  (읽기 전용)
 
-from research.delay_nowcasting.data.canonical_schema import (                  # noqa: E402
+from modules.delay_nowcasting.data.canonical_schema import (                # noqa: E402
     BONES, NUM_JOINTS, WRIST)
-from research.delay_nowcasting.deployment import forecast_packet as fp         # noqa: E402
-from research.delay_nowcasting.deployment.onnx_runner import (                 # noqa: E402
+from modules.delay_nowcasting.deployment import forecast_packet as fp         # noqa: E402
+from modules.delay_nowcasting.deployment.onnx_runner import (                 # noqa: E402
     DEFAULT_GRID_MS, ForecastRunner)
-from research.delay_nowcasting.deployment.server_history import HistoryStore   # noqa: E402
+from modules.delay_nowcasting.deployment.server_history import HistoryStore   # noqa: E402
 
 BROKER_HOST = "127.0.0.1"   # comm_hub 브로커 IP
 BROKER_PORT = 37001
@@ -61,10 +61,21 @@ PV_WIDTH, PV_HEIGHT = 640, 360
 # 실사용 체감은 따로 확인 중이다. 뺀 모델은 mixed_25d_nobone 에 있다.
 # 관절별 base 이득(base_gain)은 유지한다. 정량 이득은 199 ms 에서 1.5~3.4% 로
 # 작지만, 손끝이 크게 튀는 프레임이 소수라 평균 MPJPE 가 그 거동을 못 잡는다.
-# 주의: 아직 1 seed 다. --onnx 로 덮어쓸 수 있다.
+# 이름으로 고를 수 있는 forecast 모델. --model 로 고르고, 목록에 없는 것은 --onnx 로 준다.
+#   mixed3 : DexYCB + HOT3D + HOI4D 세 도메인 + 기하 증강. 배포 기본값이다. 배포 기기는
+#            어느 촬영 조건과도 일치하지 않으므로 단일 도메인 모델은 쓰지 않는다 — 다른
+#            도메인으로 옮겨가지 않는다는 것을 교차 평가에서 확인했다.
+#   mixed2 : DexYCB + HOT3D 두 도메인, 증강 이전. 2026-08-30 까지 배포하던 모델이며
+#            비교용으로 남긴다.
+# 주의: 둘 다 아직 1 seed 다.
+FORECAST_MODELS = {
+    "mixed3": "pretrained/forecast/mixed3.onnx",
+    "mixed2": "pretrained/forecast/mixed2.onnx",
+}
+DEFAULT_FORECAST_MODEL = "mixed3"
 DEFAULT_FORECAST_ONNX = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "research/delay_nowcasting/outputs/mixed_v1/mixed_25d/seed0/best_model.onnx")
+    FORECAST_MODELS[DEFAULT_FORECAST_MODEL])
 
 
 # 시각화. 손목 + 손가락당 4 관절 순서(canonical 21-joint).
@@ -283,7 +294,7 @@ class HubClient:
 # 문턱은 WiLoR history 실측 분포의 사분위수를 픽셀로 옮긴 값이다 — 관절별 프레임간
 # 속도 147,808 쌍에서 p25 0.18 /s, p75 0.72 /s 였고 초점거리를 곱하면 아래 값이 된다.
 # p25 아래는 사실상 정지로 보고 anchor 를 그대로 쓰고, p75 위는 예측을 그대로 쓴다.
-BLEND_SPEED_PX = (50.0, 400.0)      # PV px/s. 이 아래는 anchor, 이 위는 예측
+BLEND_SPEED_PX = (100.0, 500.0)      # PV px/s. 이 아래는 anchor, 이 위는 예측
 
 
 def blend_with_anchor(grid, history, times, intrinsics, scale_x, scale_y):
@@ -426,8 +437,10 @@ def main():
     ap = argparse.ArgumentParser(description="HL2 handtrack forecast over comm_hub")
     ap.add_argument("--host", default=BROKER_HOST, help="comm_hub 브로커 IP")
     ap.add_argument("--port", type=int, default=BROKER_PORT)
-    ap.add_argument("--onnx", default=DEFAULT_FORECAST_ONNX,
-                    help="export_onnx 로 만든 forecast 모델 (기본: %(default)s)")
+    ap.add_argument("--model", choices=sorted(FORECAST_MODELS), default=DEFAULT_FORECAST_MODEL,
+                    help="forecast 모델 (기본: %(default)s). --onnx 를 주면 무시된다")
+    ap.add_argument("--onnx", default=None,
+                    help="export_onnx 로 만든 모델 경로. --model 대신 직접 지정할 때 쓴다")
     ap.add_argument("--device-id", default="hl2-0")
     ap.add_argument("--history-length", type=int, default=8)
     ap.add_argument("--max-gap-ms", type=float, default=250.0)
@@ -455,11 +468,14 @@ def main():
                     help="시각화할 horizon. 전부 그리면 겹쳐서 안 보인다")
     args = ap.parse_args()
 
+    if args.onnx is None:
+        args.onnx = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 FORECAST_MODELS[args.model])
     if not os.path.exists(args.onnx):
         raise SystemExit(
             f"forecast 모델이 없다: {args.onnx}\n"
             "  export_onnx 로 먼저 만들거나 --onnx 로 경로를 지정하라:\n"
-            "  python -m research.delay_nowcasting.deployment.export_onnx "
+            "  python -m modules.delay_nowcasting.deployment.export_onnx "
             "--checkpoint <best_model.pt>")
 
     from modules_hand import HandTracker_onnx
@@ -467,7 +483,7 @@ def main():
     tracker = HandTracker_onnx().model_hand      # 내부 WilorHandTrackerONNX
     tracker.warmup(np.zeros((PV_HEIGHT, PV_WIDTH, 3), np.uint8))
     runner = ForecastRunner(args.onnx, args.horizons_ms)
-    print(f"forecast model = {os.path.relpath(args.onnx)}", flush=True)
+    print(f"forecast model = {args.model} ({os.path.relpath(args.onnx)})", flush=True)
     history = HistoryStore(args.history_length, args.max_gap_ms)
     hub = (WebcamSource(args.webcam_index) if args.source == "webcam"
            else HubClient(args.host, args.port))

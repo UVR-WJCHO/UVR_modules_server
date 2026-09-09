@@ -1,0 +1,39 @@
+name: dexycb_tcn_n025
+data_config: modules/delay_nowcasting/configs/data/dexycb_v1.yaml
+
+# Stage M1 — delay-conditioned direct TCN (B 계획 §7.2). 주 제안 모델.
+model:
+  type: tcn_lite
+  history_length: 8
+  channels: 128
+  dilations: [1, 2, 4]
+  dropout: 0.1
+  horizon_dim: 32
+  use_horizon_encoding: true
+  use_cv_base: true
+  decomposed: false
+  base_n_fit: 2
+
+training:
+  learning_rate: 3.0e-4      # §7.7: TCN 은 3e-4
+  weight_decay: 1.0e-4
+  batch_size: 1024
+  max_epochs: 300
+  early_stopping_patience: 25
+  gradient_clip: 1.0
+  seeds: [0, 1, 2]
+  normalization_samples: 200000
+  selection_horizons_ms: [66, 100]
+  loss_weights: {abs: 1.0, root_rel: 1.0, wrist: 2.0, bone: 0.1, displacement: 0.1}
+  validation:
+    history_frames: wilor_frames_val.parquet
+    target_frames: canonical_frames_val.parquet
+    windows_file: windows_wilor_val.parquet
+  noise:
+    noise_scale: 0.25
+    clean_ratio: 0.5
+    jitter_m: 0.001
+    fingertip_jitter_scale: 1.53
+    drift_m: 0.023
+    drift_halflife_frames: 48.0
+    enabled: [jitter, drift]

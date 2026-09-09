@@ -1,0 +1,37 @@
+name: tcn_lite_noise_cvrobust
+data_config: modules/delay_nowcasting/configs/data/hot3d_v1.yaml
+
+# Stage M1 — delay-conditioned direct TCN (B 계획 §7.2). 주 제안 모델.
+model:
+  type: tcn_lite
+  history_length: 8
+  channels: 128
+  dilations: [1, 2, 4]
+  dropout: 0.1
+  horizon_dim: 32
+  use_horizon_encoding: true
+  use_cv_base: true
+  decomposed: false
+  base_n_fit: 4
+
+training:
+  learning_rate: 3.0e-4      # §7.7: TCN 은 3e-4
+  weight_decay: 1.0e-4
+  batch_size: 4096
+  max_epochs: 250
+  early_stopping_patience: 20
+  gradient_clip: 1.0
+  seeds: [0, 1, 2]
+  normalization_samples: 200000
+  selection_horizons_ms: [66, 100]
+  loss_weights: {abs: 1.0, root_rel: 1.0, wrist: 2.0, bone: 0.1, displacement: 0.1}
+  # WiLoR history 재현용 noise (B 계획 §4.5). scale 은 임의값이 아니라 train subject 6 개의
+  # 실제 WiLoR 오차에 맞춰 fit 했다: 조건 B 의 baseline 오차가 조건 C 를 재현하도록
+  # (train 상대 RMSE 4.0%, held-out val 6.4%).
+  # 실제 오차는 흰 잡음이 거의 없고(1 mm) 약 1.6 초 상관의 느린 drift(23 mm)가 지배한다.
+  noise:
+    jitter_m: 0.001
+    fingertip_jitter_scale: 1.53
+    drift_m: 0.023
+    drift_halflife_frames: 48.0
+    enabled: [jitter, drift]

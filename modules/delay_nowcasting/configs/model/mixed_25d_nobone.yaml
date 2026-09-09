@@ -1,0 +1,57 @@
+name: mixed_25d_nobone
+data_config: modules/delay_nowcasting/configs/data/mixed_v1.yaml
+
+# 입력·출력이 WiLoR 원본과 같은 2.5D 다 — 관절마다 (u_n, v_n, rel_z). 손목 절대 depth 를
+# 쓰지 않아 그 채널의 튐이 들어오지 않는다. 실제 거리는 기기가 복원한다.
+# 속도 상한은 표현 자체의 단위로 준다 (광선 6.0 /s, rel_z 0.9 m/s). GT 를 같은 표현으로
+# 옮겨 잰 p99.9 바로 위이고, 거리를 곱하지 않으므로 버린 채널이 다시 들어오지 않는다.
+# base_n_fit 은 4 다 — 2 로 두면 마지막 프레임쌍의 순간 튐이 그대로 horizon 에 곱해져
+# 기록에서 base 가 anchor 에서 709 px 까지 날아갔다.
+# bone_2d 도 0 이다 — ablation 에서 전 구간 +-0.5% 로 효과가 없었다.
+# (원래 주석) bone 은 0, 대신 bone_2d 를 쓴다 — 이 공간의 3D 거리는 물리적 길이가 아니지만 앞 두
+# 채널(정규화 image 좌표)의 관절 간 거리는 화면상 뼈 길이로 잘 정의된다.
+# base 이득은 관절별 학습 파라미터다 (tcn_lite.base_gain).
+#
+# 시간적 일관성 temporal_smooth=1.0, 15~30 fps 프레임률 증강은 그대로 쓴다.
+model:
+  type: tcn_lite
+  history_length: 8
+  channels: 128
+  dilations: [1, 2, 4]
+  dropout: 0.1
+  horizon_dim: 32
+  use_horizon_encoding: true
+  use_cv_base: true
+  decomposed: false
+  base_n_fit: 4                # 최소제곱. 2 는 마지막 한 쌍의 튐을 그대로 받는다
+  clip_speed: [6.0, 0.9]       # (광선 /s, rel_z m/s). features.CLIP_SPEED_25D
+
+training:
+  learning_rate: 3.0e-4      # §7.7: TCN 은 3e-4
+  weight_decay: 1.0e-4
+  batch_size: 4096
+  max_epochs: 60
+  early_stopping_patience: 8
+  gradient_clip: 1.0
+  seeds: [0, 1, 2]
+  normalization_samples: 200000
+  selection_horizons_ms: [66, 100]
+  loss_weights: {abs: 1.0, root_rel: 1.0, wrist: 2.0, bone: 0.0, bone_2d: 0.0, displacement: 0.1, temporal_smooth: 1.0}
+  # 실제 WiLoR history 로 학습한다. 합성 잡음은 끄고(잡음이 이미 입력에 들어 있다)
+  # target 만 GT 로 둔다.
+  train_data:
+    history_frames: wilor25d_frames_train.parquet
+    target_frames: canonical25d_frames_train.parquet
+    windows_file: windows_wilor_train.parquet
+  validation:
+    history_frames: wilor25d_frames_val.parquet
+    target_frames: canonical25d_frames_val.parquet
+    windows_file: windows_wilor_val.parquet
+  noise:
+    noise_scale: 0.0
+    clean_ratio: 0.5
+    jitter_m: 0.001
+    fingertip_jitter_scale: 1.53
+    drift_m: 0.023
+    drift_halflife_frames: 48.0
+    enabled: [jitter, drift]

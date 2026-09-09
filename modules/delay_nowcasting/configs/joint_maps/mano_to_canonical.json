@@ -1,0 +1,16 @@
+{
+  "name": "mano_to_canonical",
+  "description": "smplx MANO joint(16) + tip vertex(5) -> canonical 21-joint (DexYCB/OpenPose hand) 순서. HOT3D 의 MANO parameter 로 skeleton 을 재생성할 때와, WiLoR 출력을 해석할 때 같은 매핑을 쓴다.",
+  "source_convention": "concat(smplx.MANOLayer.joints[0:16], vertices[tip_vertex_ids] in order thumb,index,middle,ring,pinky) -> 21 entries indexed 0..20",
+  "target_convention": "canonical 21 (modules/delay_nowcasting/data/canonical_schema.py: JOINT_NAMES)",
+  "tip_vertex_ids": {
+    "thumb": 744,
+    "index": 320,
+    "middle": 443,
+    "ring": 554,
+    "pinky": 671
+  },
+  "index_map": [0, 13, 14, 15, 16, 1, 2, 3, 17, 4, 5, 6, 18, 10, 11, 12, 19, 7, 8, 9, 20],
+  "reference": "_legacy/handtracker_wilor/wilor/models/mano_wrapper.py:20 (mano_to_openpose), smplx.vertex_ids.vertex_ids['mano']",
+  "verification": "Phase 1 에서 최소 20 frame 의 2D overlay 로 수동 검증한다 (B 계획 §3.1)."
+}

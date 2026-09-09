@@ -1,0 +1,37 @@
+name: dexycb_v1
+
+dataset:
+  source_dataset: DexYCB
+  root: /mnt/shared/dataset/dexycb
+  calibration_root: /mnt/shared/dataset/dexycb/calibration
+  # joint_3d 가 이미 canonical 21-joint MANO 순서라 joint map 이 필요 없다.
+  # timestamp 가 없어 frame index x 33.333 ms 로 만든다(8 카메라 동기 30 fps).
+
+units:
+  length: meter
+  time: nanosecond
+
+split:
+  # subject-disjoint. DexYCB 는 subject-01~10 이 전부다(공식 배포 목록으로 확인).
+  # val 은 subject-05 로 유지해 확장 전후를 직접 비교할 수 있게 한다.
+  name: dexycb_subject_v2
+  train: [subject-01, subject-02, subject-03, subject-04,
+          subject-06, subject-07, subject-08, subject-09]
+  val: [subject-05]
+  test: [subject-10]
+
+window:
+  history_length: 8
+  max_history_gap_ms: 150      # 기준 stride 3(100ms) + 간헐 지연을 허용
+  history_max_stride: 2        # 기준 프레임률 하한 (30/2 = 15 fps)
+  history_min_fps: 15          # 15~30 fps 를 섞어 학습한다
+  horizon_tolerance_ms: 8.0
+  native_horizons_ms: [33, 66, 100, 133, 166, 199, 233, 266, 300]
+  # 30 fps 라 격자가 네이티브로 맞는다. 보간 horizon 을 두면 window 집합이
+  # 바뀌어 이미 보고한 수치와 어긋나므로 비워 둔다.
+  interpolated_horizons_ms: []
+
+evaluation:
+  horizons_ms: [0, 33, 66, 100, 133, 166, 199, 233, 266, 300]
+
+output_root: research_data

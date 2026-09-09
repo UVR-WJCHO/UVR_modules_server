@@ -1,0 +1,48 @@
+name: mixed_fps_clip_n4
+data_config: modules/delay_nowcasting/configs/data/mixed_v1.yaml
+
+# 프레임률 증강 + CV base 속도 상한 2.0 m/s (features.CLIP_SPEED_MPS).
+# 방향 전환 구간에서 예측이 튀는 것을 막는다 (전환 60도 이상 구간 오차가
+# 전체 평균의 6 배였다). base_n_fit 은 2 로 둔다.
+# 배포 중인 mixed_big_wilor 를 덮지 않도록 출력 디렉터리를 분리한다.
+model:
+  type: tcn_lite
+  history_length: 8
+  channels: 128
+  dilations: [1, 2, 4]
+  dropout: 0.1
+  horizon_dim: 32
+  use_horizon_encoding: true
+  use_cv_base: true
+  decomposed: false
+  base_n_fit: 4
+
+training:
+  learning_rate: 3.0e-4      # §7.7: TCN 은 3e-4
+  weight_decay: 1.0e-4
+  batch_size: 4096
+  max_epochs: 60
+  early_stopping_patience: 8
+  gradient_clip: 1.0
+  seeds: [0, 1, 2]
+  normalization_samples: 200000
+  selection_horizons_ms: [66, 100]
+  loss_weights: {abs: 1.0, root_rel: 1.0, wrist: 2.0, bone: 0.1, displacement: 0.1}
+  # 실제 WiLoR history 로 학습한다. 합성 잡음은 끄고(잡음이 이미 입력에 들어 있다)
+  # target 만 GT 로 둔다.
+  train_data:
+    history_frames: wilor_frames_train.parquet
+    target_frames: canonical_frames_train.parquet
+    windows_file: windows_wilor_train.parquet
+  validation:
+    history_frames: wilor_frames_val.parquet
+    target_frames: canonical_frames_val.parquet
+    windows_file: windows_wilor_val.parquet
+  noise:
+    noise_scale: 0.0
+    clean_ratio: 0.5
+    jitter_m: 0.001
+    fingertip_jitter_scale: 1.53
+    drift_m: 0.023
+    drift_halflife_frames: 48.0
+    enabled: [jitter, drift]

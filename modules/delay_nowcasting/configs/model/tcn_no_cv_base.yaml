@@ -1,0 +1,27 @@
+name: tcn_no_cv_base
+data_config: modules/delay_nowcasting/configs/data/hot3d_v1.yaml
+
+# CV residual base 제거 (§10.2 ablation 3)
+model:
+  type: tcn_lite
+  history_length: 8
+  channels: 128
+  dilations: [1, 2, 4]
+  dropout: 0.1
+  horizon_dim: 32
+  use_horizon_encoding: true
+  use_cv_base: false
+  decomposed: false
+  base_n_fit: 2
+
+training:
+  learning_rate: 3.0e-4      # §7.7: TCN 은 3e-4
+  weight_decay: 1.0e-4
+  batch_size: 4096
+  max_epochs: 100
+  early_stopping_patience: 10
+  gradient_clip: 1.0
+  seeds: [0, 1, 2]
+  normalization_samples: 200000
+  selection_horizons_ms: [66, 100]
+  loss_weights: {abs: 1.0, root_rel: 1.0, wrist: 2.0, bone: 0.1, displacement: 0.1}

@@ -1,0 +1,53 @@
+name: mixed_spike
+data_config: modules/delay_nowcasting/configs/data/mixed_v1.yaml
+
+# mixed_tmp_s10 에 손목 depth 튐 주입만 더한 것이다. HL2 기록에서 프레임간 손목 depth
+# 변화가 중앙값 1.0 mm 인데 1.7% 의 프레임이 40 mm, 0.8% 가 100 mm 를 넘고 최대 355 mm
+# 였다. 그 한 프레임이 history 에 8 프레임 남아 예측을 발산시킨다 — 튐 크기와 199 ms
+# 오차가 <10mm 23.4 / 20~40mm 93.9 / >80mm 271.4 mm 로 단조 증가했고, 외삽이 없는
+# horizon 0 에서도 96 mm 어긋났다. 발생률은 실측 1.7% 에 맞춘다.
+#
+# 시간적 일관성 temporal_smooth=1.0. 프레임률 증강 + 속도 상한 2.0 m/s (features.CLIP_SPEED_MPS).
+# 방향 전환 구간에서 예측이 튀는 것을 막는다 (전환 60도 이상 구간 오차가
+# 전체 평균의 6 배였다). base_n_fit 은 2 로 둔다.
+# 배포 중인 mixed_big_wilor 를 덮지 않도록 출력 디렉터리를 분리한다.
+model:
+  type: tcn_lite
+  history_length: 8
+  channels: 128
+  dilations: [1, 2, 4]
+  dropout: 0.1
+  horizon_dim: 32
+  use_horizon_encoding: true
+  use_cv_base: true
+  decomposed: false
+  base_n_fit: 2
+
+training:
+  learning_rate: 3.0e-4      # §7.7: TCN 은 3e-4
+  weight_decay: 1.0e-4
+  batch_size: 4096
+  max_epochs: 60
+  early_stopping_patience: 8
+  gradient_clip: 1.0
+  seeds: [0]      # 가중치 훑기. 우세한 것만 3 seed
+  normalization_samples: 200000
+  selection_horizons_ms: [66, 100]
+  loss_weights: {abs: 1.0, root_rel: 1.0, wrist: 2.0, bone: 0.1, displacement: 0.1, temporal_smooth: 1.0}
+  # 실제 WiLoR history 로 학습한다. 합성 잡음은 끄고(잡음이 이미 입력에 들어 있다)
+  # target 만 GT 로 둔다.
+  train_data:
+    history_frames: wilor_frames_train.parquet
+    target_frames: canonical_frames_train.parquet
+    windows_file: windows_wilor_train.parquet
+  validation:
+    history_frames: wilor_frames_val.parquet
+    target_frames: canonical_frames_val.parquet
+    windows_file: windows_wilor_val.parquet
+  # WiLoR history 에는 이미 실제 잡음이 들어 있다. 여기서 더하는 것은 depth 튐뿐이다.
+  noise:
+    depth_spike_rate: 0.02
+    depth_spike_min_m: 0.03
+    depth_spike_max_m: 0.35
+    depth_spike_distance_m: 0.35
+    enabled: [depth_spike]

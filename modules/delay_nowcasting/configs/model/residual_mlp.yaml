@@ -1,0 +1,33 @@
+name: residual_mlp
+data_config: modules/delay_nowcasting/configs/data/hot3d_v1.yaml
+
+# Stage M0 — constant-velocity residual MLP (B 계획 §7.1).
+# 연구 최종안이 아니라 Gate 2 판정용 feasibility model 이다.
+model:
+  type: residual_mlp
+  history_length: 8
+  hidden_width: 256
+  hidden_layers: 3
+  dropout: 0.1
+  base_n_fit: 2      # residual 이 올라탈 CV base. Phase 1 에서 GT history 최강이 2-frame
+  accel_n_fit: 4     # acceleration feature 용 2차 fit 구간
+
+training:
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  # 계획서는 256 에서 시작하라고 했지만 모델이 0.3M param 이라 GPU 가 놀아서 4096 을 쓴다.
+  batch_size: 4096
+  max_epochs: 100
+  early_stopping_patience: 10
+  gradient_clip: 1.0
+  seeds: [0, 1, 2]
+  normalization_samples: 200000
+  # 계획서의 checkpoint 기준은 val 50/66/100 ms 평균이지만 50 ms 는 HOT3D 의 native
+  # horizon 이 아니다(§4.4-7). native 인 66/100 ms 로 고정한다.
+  selection_horizons_ms: [66, 100]
+  loss_weights:
+    abs: 1.0
+    root_rel: 1.0
+    wrist: 2.0
+    bone: 0.1
+    displacement: 0.1

@@ -1,0 +1,37 @@
+name: hoi4d_v1
+
+dataset:
+  source_dataset: HOI4D
+  root: /mnt/shared/dataset/hoi4d
+  mano_dir: pretrained/handtracker_onnx/mano_data
+  # 3D 관절이 주석에 없어 MANO forward 로 만든다. 규약과 검증 수치는 adapters/hoi4d.py 참고.
+  # MANO_LEFT.pkl 이 없어 오른손만 쓴다.
+  # 15 fps 고정이라 timestamp 는 frame index / 15 로 만든다.
+
+units:
+  length: meter
+  time: nanosecond
+
+split:
+  # DexYCB 의 subject-disjoint 에 대응하는 축이 HOI4D 에는 없다. 최상위 수집 장비
+  # (ZY2021080000*) 4 대가 유일한 자연스러운 경계라 이것으로 나눈다. 장비가 곧 피험자는
+  # 아니므로 subject-disjoint 만큼 강한 분리는 아니며, 그 한계를 그대로 안고 간다.
+  name: hoi4d_camera_v1
+  train: [ZY20210800001, ZY20210800002]
+  val: [ZY20210800003]
+  test: [ZY20210800004]
+
+window:
+  history_length: 8
+  max_history_gap_ms: 150
+  history_max_stride: 1        # 원본이 15 fps 라 더 건너뛸 여지가 없다
+  history_min_fps: 15
+  horizon_tolerance_ms: 8.0
+  # 66.7 ms 간격이라 격자 대부분이 보간 target 이 된다. 네이티브로 맞는 것만 여기 둔다.
+  native_horizons_ms: [66, 133, 199, 266]
+  interpolated_horizons_ms: [33, 100, 166, 233, 300]
+
+evaluation:
+  horizons_ms: [0, 33, 66, 100, 133, 166, 199, 233, 266, 300]
+
+output_root: research_data

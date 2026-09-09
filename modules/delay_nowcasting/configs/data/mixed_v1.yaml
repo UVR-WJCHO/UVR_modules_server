@@ -1,0 +1,36 @@
+name: mixed_v1
+
+# HOT3D + DexYCB 를 이어 붙인 것이다. frame 표는 build_mixed 로 미리 만들어 두었고,
+# 이 config 는 window/학습/평가 경로만 지정한다. sequence_id 규약이 서로 달라
+# (HOT3D "P0012_xxx", DexYCB "2020...-subject-05/xxx@serial") track 이 충돌하지 않는다.
+#
+# 규모 비율은 지표에 따라 다르다 — window 1.39:1, recording 0.11:1,
+# 고유 손 동작 시간 8.7:1 (HOT3D:DexYCB). 우선 window 그대로 concat 한다.
+dataset:
+  source_dataset: HOT3D+DexYCB
+
+units:
+  length: meter
+  time: nanosecond
+
+split:
+  name: mixed_v1
+  train: []      # frame 표를 미리 만들어 두므로 split 스캔을 쓰지 않는다
+  val: []
+  test: []
+
+window:
+  history_length: 8
+  max_history_gap_ms: 150      # 기준 stride 3(100ms) + 간헐 지연을 허용
+  history_max_stride: 2        # 기준 프레임률 하한 (30/2 = 15 fps)
+  history_min_fps: 15          # 15~30 fps 를 섞어 학습한다
+  horizon_tolerance_ms: 8.0
+  native_horizons_ms: [33, 66, 100, 133, 166, 199, 233, 266, 300]
+  # 30 fps 라 격자가 네이티브로 맞는다. 보간 horizon 을 두면 window 집합이
+  # 바뀌어 이미 보고한 수치와 어긋나므로 비워 둔다.
+  interpolated_horizons_ms: []
+
+evaluation:
+  horizons_ms: [0, 33, 66, 100, 133, 166, 199, 233, 266, 300]
+
+output_root: research_data

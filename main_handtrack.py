@@ -15,7 +15,7 @@
 실행:
     conda activate uvr_integ            # 핸드/제스처 모델용 (torch 등)
     cd WiseUIServer
-    python main_handtrack_comm.py --host <브로커IP> --port 37001
+    python main_handtrack.py --host <브로커IP> --port 37001
 """
 import sys
 import os
@@ -40,6 +40,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "_ut
 # protobuf 정의는 _comm/ 아래
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "_comm"))
 import hl2_data_pb2 as proto
+from hub_client import (                       # noqa: E402
+    HubClient, add_broker_args, KW_SERVER_RESULT)
 
 
 # --- CONFIGURATION ---
@@ -48,11 +50,7 @@ FLAG_INTERACTION_DETECT = False  # object-aware gesture detection
 FLAG_VISUALIZE_DEPTH = True     # True 면 Depth 창을 띄운다 (선택적 시각화)
 FLAG_GESTURE = False              # True 면 gesture 인식 수행 (False 면 hand tracking 만)
 
-# comm_hub 브로커 접속
-BROKER_HOST = "127.0.0.1"   # comm_hub 브로커 IP
-BROKER_PORT = 37001
-RECV_KW = b"HL2DATA"
-RESULT_KW = b"SERVER_RESULT"
+# comm_hub 접속. 주소와 keyword 는 _comm/hub_client.py 가 갖는다
 IDENTITY = b"HANDTRACK"
 
 # Front RGB camera parameters (hand tracker 입력 크기)
@@ -77,68 +75,6 @@ THRESHOLD_NUM = 5
 
 
 # --- comm_hub 클라이언트 (수신 conflate + 결과 UPLOAD) ---
-class HubClient:
-    """comm_hub DEALER 클라이언트. 수신은 백그라운드 스레드에서 최신 프레임만 유지(conflate),
-    결과 UPLOAD 는 별도 소켓으로(스레드 안전) 보낸다."""
-
-    def __init__(self, host, port, recv_kw=RECV_KW, result_kw=RESULT_KW, identity=IDENTITY):
-        self.ctx = zmq.Context()
-        self.identity = identity
-        self.result_kw = result_kw
-
-        # 수신 소켓 (백그라운드 스레드 전용)
-        self.rx = self.ctx.socket(zmq.DEALER)
-        self.rx.setsockopt(zmq.IDENTITY, identity)
-        self.rx.setsockopt(zmq.RCVTIMEO, 500)
-        self.rx.connect(f"tcp://{host}:{port}")
-        self.rx.send_multipart([b"", b"RECV_REG", recv_kw, identity, b"ALL"])
-
-        # 송신 소켓 (메인 스레드 전용) — 같은 소켓을 두 스레드가 쓰지 않도록 분리
-        self.tx = self.ctx.socket(zmq.DEALER)
-        self.tx.setsockopt(zmq.IDENTITY, identity + b"_TX")
-        self.tx.connect(f"tcp://{host}:{port}")
-
-        self.q = Queue(maxsize=1)   # 최신 1프레임만 (느린 처리 중 오래된 프레임 드롭)
-        self._fid = 0
-        self._stop = False
-        self._thr = threading.Thread(target=self._rx_loop, daemon=True)
-        self._thr.start()
-        print(f"{identity.decode()} :: connected tcp://{host}:{port}, recv={recv_kw.decode()} result={result_kw.decode()}", flush=True)
-
-    def _rx_loop(self):
-        while not self._stop:
-            try:
-                msg = self.rx.recv_multipart()
-            except zmq.Again:
-                continue
-            except zmq.ZMQError:
-                break   # 소켓/컨텍스트 종료 시
-            if msg[1] == b"NOTIFY":
-                _, _, kw, src, fid = msg
-                self.rx.send_multipart([b"", b"DOWNLOAD", kw, src, fid])
-            elif msg[1] == b"DATA_REPLY":
-                _, _, kw, src, fid, data = msg
-                if self.q.full():
-                    try:
-                        self.q.get_nowait()
-                    except Empty:
-                        pass
-                self.q.put(data)
-
-    def get_latest(self, timeout=1.0):
-        try:
-            return self.q.get(timeout=timeout)
-        except Empty:
-            return None
-
-    def send_result(self, payload):
-        self._fid += 1
-        self.tx.send_multipart([b"", b"UPLOAD", self.result_kw, self.identity,
-                                str(self._fid).encode(), payload])
-
-    def close(self):
-        self._stop = True
-        self.rx.close(); self.tx.close(); self.ctx.term()
 
 
 # --- 디코딩 헬퍼 ---
@@ -241,8 +177,7 @@ def build_result(pkt, hand_flat, gesture_idx):
 # --- MAIN ---
 def main():
     ap = argparse.ArgumentParser(description="HL2 handtrack over comm_hub")
-    ap.add_argument("--host", default=BROKER_HOST, help="comm_hub 브로커 IP")
-    ap.add_argument("--port", type=int, default=BROKER_PORT)
+    add_broker_args(ap)
     args = ap.parse_args()
 
     # 무거운 모델 import 는 여기서 (모듈 import 를 가볍게 유지 -> comm 계층 테스트 가능)
@@ -265,7 +200,8 @@ def main():
         return
 
     # 2. comm_hub 연결
-    hub = HubClient(args.host, args.port)
+    hub = HubClient(args.host, args.port,
+                    result_kw=KW_SERVER_RESULT, identity=IDENTITY)
 
     # 3. Visualization
     cv2.namedWindow('Prompt')
@@ -320,7 +256,7 @@ def main():
                 valid_gesture_idx = -1
                 gesture_cnt = 0
                 # 손 미검출: 더미 pose + -1 (pose/ts/intrinsics 는 echo)
-                hub.send_result(build_result(pkt, debug_pose.flatten(), -1))
+                hub.send(build_result(pkt, debug_pose.flatten(), -1))
                 continue
 
             # 7-9. Gesture recognition (optional, FLAG_GESTURE)
@@ -404,7 +340,7 @@ def main():
 
             # 손을 찾은 프레임은 항상 3D 로 나간다. 더미(전부 1.0 = "유효하지 않음")는
             # 손 미검출일 때만 쓴다.
-            hub.send_result(build_result(pkt, hand3d.flatten(), out_idx))
+            hub.send(build_result(pkt, hand3d.flatten(), out_idx))
 
     except KeyboardInterrupt:
         pass

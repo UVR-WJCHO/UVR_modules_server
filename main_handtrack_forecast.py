@@ -1,6 +1,6 @@
-"""main_handtrack_comm 의 forecast 버전.
+"""main_handtrack 의 forecast 버전.
 
-기존 `main_handtrack_comm.py` 는 프레임마다 WiLoR 를 돌려 **그 프레임의** 자세를 돌려준다.
+기존 `main_handtrack.py` 는 프레임마다 WiLoR 를 돌려 **그 프레임의** 자세를 돌려준다.
 그 자세는 HL2 에 도착할 때 이미 낡아 있다. 이 파일은 같은 입력에서 **여러 horizon 의
 forecast grid** 를 만들어 보낸다. HL2 는 렌더 시점의 pose age 를 재서 인접한 두 forecast
 를 보간해 그린다 (계획서 §0.1).
@@ -8,7 +8,7 @@ forecast grid** 를 만들어 보낸다. HL2 는 렌더 시점의 pose age 를 �
     수신: comm_hub(DEALER) 로 HL2DATA(HL2SensorPacket) 구독
     송신: HandForecast 를 kw=HAND_FORECAST 로 UPLOAD (기존 SERVER_RESULT 와 별도 채널)
 
-**기존 파일을 하나도 고치지 않는다.** `main_handtrack_comm.py`, `modules/`,
+**기존 파일을 하나도 고치지 않는다.** `main_handtrack.py`, `modules/`,
 `_comm/hl2_data.proto` 는 읽기만 한다. forecast 메시지는 `_comm/hl2_forecast.proto` 로
 따로 두었고, 양손 추론은 tracker 의 공개/내부 메서드를 밖에서 호출해 처리한다.
 
@@ -37,6 +37,8 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_ROOT, "modules"))
 sys.path.insert(0, os.path.join(_ROOT, "_comm"))
 import hl2_data_pb2 as proto                     # noqa: E402  (읽기 전용)
+from hub_client import (                       # noqa: E402
+    HubClient, add_broker_args, KW_HAND_FORECAST)
 
 from modules.delay_nowcasting.data.canonical_schema import (                # noqa: E402
     BONES, NUM_JOINTS, WRIST)
@@ -45,10 +47,7 @@ from modules.delay_nowcasting.deployment.onnx_runner import (                 # 
     DEFAULT_GRID_MS, ForecastRunner)
 from modules.delay_nowcasting.deployment.server_history import HistoryStore   # noqa: E402
 
-BROKER_HOST = "127.0.0.1"   # comm_hub 브로커 IP
-BROKER_PORT = 37001
-RECV_KW = b"HL2DATA"
-FORECAST_KW = b"HAND_FORECAST"
+# comm_hub 접속. 주소와 keyword 는 _comm/hub_client.py 가 갖는다
 IDENTITY = b"HANDFORECAST"
 
 PV_WIDTH, PV_HEIGHT = 640, 360
@@ -224,68 +223,6 @@ class WebcamSource:
         self.cap.release()
 
 
-class HubClient:
-    """comm_hub DEALER. main_handtrack_comm 의 것과 같은 규약이되 결과 keyword 만 다르다."""
-
-    def __init__(self, host, port, recv_kw=RECV_KW, result_kw=FORECAST_KW, identity=IDENTITY):
-        self.ctx = zmq.Context()
-        self.identity = identity
-        self.result_kw = result_kw
-        self.rx = self.ctx.socket(zmq.DEALER)
-        self.rx.setsockopt(zmq.IDENTITY, identity)
-        self.rx.setsockopt(zmq.RCVTIMEO, 500)
-        self.rx.connect(f"tcp://{host}:{port}")
-        self.rx.send_multipart([b"", b"RECV_REG", recv_kw, identity, b"ALL"])
-        self.tx = self.ctx.socket(zmq.DEALER)
-        self.tx.setsockopt(zmq.IDENTITY, identity + b"_TX")
-        self.tx.connect(f"tcp://{host}:{port}")
-        self.q = Queue(maxsize=1)
-        self.n_arrived = 0      # 브로커에서 실제로 도착한 프레임
-        self.n_dropped = 0      # 루프가 처리 중이라 버린 프레임
-        self._fid = 0
-        self._stop = False
-        threading.Thread(target=self._rx_loop, daemon=True).start()
-        print(f"{identity.decode()} :: tcp://{host}:{port} "
-              f"recv={recv_kw.decode()} result={result_kw.decode()}", flush=True)
-
-    def _rx_loop(self):
-        while not self._stop:
-            try:
-                msg = self.rx.recv_multipart()
-            except zmq.Again:
-                continue
-            except zmq.ZMQError:
-                break
-            if msg[1] == b"NOTIFY":
-                self.rx.send_multipart([b"", b"DOWNLOAD", msg[2], msg[3], msg[4]])
-            elif msg[1] == b"DATA_REPLY":
-                self.n_arrived += 1
-                if self.q.full():
-                    try:
-                        self.q.get_nowait()
-                        self.n_dropped += 1
-                    except Empty:
-                        pass
-                self.q.put(msg[5])
-
-    def get_latest(self, timeout=1.0):
-        try:
-            return self.q.get(timeout=timeout)
-        except Empty:
-            return None
-
-    def send(self, payload):
-        self._fid += 1
-        self.tx.send_multipart([b"", b"UPLOAD", self.result_kw, self.identity,
-                                str(self._fid).encode(), payload])
-
-    def close(self):
-        self._stop = True
-        self.rx.close()
-        self.tx.close()
-        self.ctx.term()
-
-
 # 관절별 anchor/예측 혼합. 정지한 관절은 WiLoR 자세가 이미 잘 맞으므로 예측이
 # 얹어 주는 것이 오차뿐이다. 관절마다 최근 속도를 재서 느리면 anchor 쪽으로,
 # 빠르면 예측 쪽으로 간다.
@@ -435,8 +372,7 @@ def detect_hands(tracker, frame):
 
 def main():
     ap = argparse.ArgumentParser(description="HL2 handtrack forecast over comm_hub")
-    ap.add_argument("--host", default=BROKER_HOST, help="comm_hub 브로커 IP")
-    ap.add_argument("--port", type=int, default=BROKER_PORT)
+    add_broker_args(ap)
     ap.add_argument("--model", choices=sorted(FORECAST_MODELS), default=DEFAULT_FORECAST_MODEL,
                     help="forecast 모델 (기본: %(default)s). --onnx 를 주면 무시된다")
     ap.add_argument("--onnx", default=None,
@@ -486,7 +422,8 @@ def main():
     print(f"forecast model = {args.model} ({os.path.relpath(args.onnx)})", flush=True)
     history = HistoryStore(args.history_length, args.max_gap_ms)
     hub = (WebcamSource(args.webcam_index) if args.source == "webcam"
-           else HubClient(args.host, args.port))
+           else HubClient(args.host, args.port,
+                          result_kw=KW_HAND_FORECAST, identity=IDENTITY))
     print(f"forecast grid = {args.horizons_ms} ms", flush=True)
 
     frame_id, sent, latencies = 0, 0, []

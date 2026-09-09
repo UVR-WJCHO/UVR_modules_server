@@ -1,6 +1,6 @@
 """서버가 유지하는 (device, track, hand) 별 anchor ring buffer (B 계획 §2.4, §5).
 
-nowcaster 는 과거 N 프레임을 본다. 그런데 `main_handtrack_comm.py` 는 프레임마다 독립
+nowcaster 는 과거 N 프레임을 본다. 그런데 `main_handtrack.py` 는 프레임마다 독립
 처리라 history 가 없다. 이 모듈이 그 상태를 담당한다.
 
 계획서 §2.4 의 규칙을 그대로 구현한다.

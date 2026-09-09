@@ -1,6 +1,6 @@
 # SERVER_RESULT 수신 프로토콜 (HL2 / Unity 구현용)
 
-서버(`main_handtrack_comm.py`)가 손 추론 결과를 comm_hub(ZeroMQ ROUTER 브로커)를 통해
+서버(`main_handtrack.py`)가 손 추론 결과를 comm_hub(ZeroMQ ROUTER 브로커)를 통해
 HL2로 되돌린다. HL2(Unity) 쪽에 이 결과를 **수신**하는 파트를 새로 구현해야 한다.
 이 문서는 그 구현에 필요한 전송 형태/포맷을 정의한다.
 

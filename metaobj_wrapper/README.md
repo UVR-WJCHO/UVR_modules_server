@@ -4,7 +4,7 @@
 
 ## Conda 환경
 
-메인 서버에서 `main_meshrecon_comm.py`가 이 래퍼를 직접 import하므로,
+메인 서버에서 `main_meshrecon.py`가 이 래퍼를 직접 import하므로,
 프로젝트의 GPU 실행 환경과 같은 `uvr_integ`를 사용합니다.
 
 ```bash

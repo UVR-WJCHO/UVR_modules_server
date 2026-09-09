@@ -24,7 +24,7 @@
 실행:
     conda activate uvr_integ
     python comm_hub.py --port 37001        # 터미널 1
-    python main_meshrecon_comm.py          # 터미널 2
+    python main_meshrecon.py          # 터미널 2
 """
 import os
 import sys
@@ -52,16 +52,15 @@ import zmq
 from PIL import Image
 
 import hl2_data_pb2 as proto
+from hub_client import (                       # noqa: E402
+    HubClient, add_broker_args, KW_MESH_RESULT)
 
 from modules_console import (enable_cbreak_stdin, read_key_nonblocking,
                              restore_stdin_cbreak)
 
 
 # --- CONFIGURATION ---
-BROKER_HOST = "127.0.0.1"
-BROKER_PORT = 37001
-RECV_KW = b"HL2DATA"
-RESULT_KW = b"MESH_RESULT"
+# comm_hub 접속. 주소와 keyword 는 _comm/hub_client.py 가 갖는다
 IDENTITY = b"MESHRECON"
 
 flag_recon_mesh = True
@@ -69,69 +68,6 @@ flag_interactive_hotrack = True   # True: InteractiveHoTrackSegmentor, False: le
 
 
 # --- comm_hub 클라이언트 (최신 프레임만 유지) ---
-class HubClient:
-    """comm_hub DEALER 클라이언트. 수신은 백그라운드 스레드에서 최신 1프레임만 남긴다."""
-
-    def __init__(self, host, port, recv_kw=RECV_KW, result_kw=RESULT_KW, identity=IDENTITY):
-        self.ctx = zmq.Context()
-        self.identity = identity
-        self.result_kw = result_kw
-
-        # 수신 소켓 (백그라운드 스레드 전용)
-        self.rx = self.ctx.socket(zmq.DEALER)
-        self.rx.setsockopt(zmq.IDENTITY, identity)
-        self.rx.setsockopt(zmq.RCVTIMEO, 500)
-        self.rx.connect(f"tcp://{host}:{port}")
-        self.rx.send_multipart([b"", b"RECV_REG", recv_kw, identity, b"ALL"])
-
-        # 송신 소켓 (메인 스레드 전용) — 같은 소켓을 두 스레드가 쓰지 않도록 분리
-        self.tx = self.ctx.socket(zmq.DEALER)
-        self.tx.setsockopt(zmq.IDENTITY, identity + b"_TX")
-        self.tx.connect(f"tcp://{host}:{port}")
-
-        self.q = Queue(maxsize=1)
-        self._fid = 0
-        self._stop = False
-        threading.Thread(target=self._rx_loop, daemon=True).start()
-        print(f"{identity.decode()} :: connected tcp://{host}:{port}, "
-              f"recv={recv_kw.decode()} result={result_kw.decode()}", flush=True)
-
-    def _rx_loop(self):
-        while not self._stop:
-            try:
-                msg = self.rx.recv_multipart()
-            except zmq.Again:
-                continue
-            except zmq.ZMQError:
-                break
-            if msg[1] == b"NOTIFY":
-                _, _, kw, src, fid = msg
-                self.rx.send_multipart([b"", b"DOWNLOAD", kw, src, fid])
-            elif msg[1] == b"DATA_REPLY":
-                if self.q.full():
-                    try:
-                        self.q.get_nowait()
-                    except Empty:
-                        pass
-                self.q.put(msg[5])
-
-    def get_latest(self, timeout=1.0):
-        try:
-            return self.q.get(timeout=timeout)
-        except Empty:
-            return None
-
-    def send_mesh(self, payload):
-        """합본 GLB 를 UPLOAD. 프레임마다가 아니라 정합이 끝날 때 한 번 나간다."""
-        self._fid += 1
-        self.tx.send_multipart([b"", b"UPLOAD", self.result_kw, self.identity,
-                                str(self._fid).encode(), payload])
-
-    def close(self):
-        self._stop = True
-        self.rx.close()
-        self.tx.close()
-        self.ctx.term()
 
 
 # --- 패킷 -> meshalignment 가 읽는 형태 ---
@@ -269,8 +205,7 @@ def build_mesh_result(glb_path: Path, metadata_path: Path, unit_names):
 # --- MAIN ---
 def main():
     ap = argparse.ArgumentParser(description="HL2 meshrecon over comm_hub")
-    ap.add_argument("--host", default=BROKER_HOST, help="comm_hub 브로커 IP")
-    ap.add_argument("--port", type=int, default=BROKER_PORT)
+    add_broker_args(ap)
     ap.add_argument("--session", default=None,
                     help="캡처를 쌓을 디렉토리 (기본: output/<timestamp>)")
     ap.add_argument("--device", default="cuda")
@@ -295,7 +230,8 @@ def main():
     if meshrecon is not None:
         print("[Init] MeshReconstructor ready")
 
-    hub = HubClient(args.host, args.port)
+    hub = HubClient(args.host, args.port,
+                    result_kw=KW_MESH_RESULT, identity=IDENTITY)
 
     units = []           # 재구성이 끝난 유닛 이름, 캡처 순서
     assemblies = []      # (조립 캡처 이름, [그 안의 유닛])
@@ -414,10 +350,10 @@ def main():
                     meta = session_dir / "combined_metadata.json"
                     combine(inputs, len(units), glb, meta)
                     payload = build_mesh_result(glb, meta, units)
-                    hub.send_mesh(payload)
+                    hub.send(payload)
                     print(f"\n[Align] combined {len(units)} units -> {glb} "
                           f"({glb.stat().st_size / 1024:.0f} KB)")
-                    print(f"[Send] UPLOAD {RESULT_KW.decode()} "
+                    print(f"[Send] UPLOAD {KW_MESH_RESULT.decode()} "
                           f"({len(payload) / 1024:.0f} KB) -> comm_hub")
                 except Exception as e:
                     fail(f"alignment (units={units}, "

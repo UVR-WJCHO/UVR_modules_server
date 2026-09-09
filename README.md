@@ -39,6 +39,7 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 │   ├── texpaint/              # texture painting
 │   └── behavior/              # VLM material/affordance pipeline (self-contained)
 │
+├── _comm/                     # protobuf definitions + HubClient shared by every entry point
 ├── _hl2ss/                    # vendored hl2ss library (HoloLens2 sensor streaming)
 ├── _utils/                    # misc utilities
 ├── _calibration/              # HL2 depth calibration (auto-generated on connect)

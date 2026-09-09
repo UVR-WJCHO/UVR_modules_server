@@ -6,7 +6,7 @@
 HOT3D 판(`build_wilor_cache.py`)과 결정적으로 다른 점: **실제 depth 를 쓴다.**
 HOT3D cache 에는 depth 가 없어 root lifting 에 GT wrist depth 를 썼고, 그래서 조건 C 가
 실제보다 낙관적이었다. DexYCB 에는 `aligned_depth_to_color_*.png` 가 있어
-`main_handtrack_comm.py: lift_pose_cam3d` 와 같은 경로를 그대로 재현한다.
+`main_handtrack.py: lift_pose_cam3d` 와 같은 경로를 그대로 재현한다.
 
   wrist 픽셀 주변의 유효 depth 최근접값 -> wrist 깊이
   나머지 관절은 WiLoR 의 root-relative z 로 올린다

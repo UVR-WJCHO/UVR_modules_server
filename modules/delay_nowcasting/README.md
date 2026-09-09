@@ -161,5 +161,5 @@ python -m pytest modules/delay_nowcasting/tests -q
 나머지 산출물은 `research_data/hot3d_v1/` 에 있다.
 
 이 연구의 소스와 산출물은 전부 `research/` 안에만 두고, `research/` 는 저장소 `.gitignore`
-에 올라가 있어 git 에 들어가지 않는다. production 경로(`main_handtrack_comm.py`, `_comm/`)
+에 올라가 있어 git 에 들어가지 않는다. production 경로(`main_handtrack.py`, `_comm/`)
 변경은 Gate 2 통과 이후 별도 커밋으로만 반영한다 (B 계획 §2.5).

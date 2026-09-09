@@ -15,7 +15,7 @@ GT history 성능은 motion prediction 상한일 뿐이다(§10.3 A). 배포 경
   4. detector class 0 = LEFT, 1 = RIGHT (GT box2d 의 hand_index 와 같다).
 
 root lifting: 서버는 depth 센서에서 실제 wrist depth 를 받아 lifting 하지만
-(`main_handtrack_comm.py: lift_pose_cam3d`) HOT3D cache 에는 depth 가 없다. 그래서
+(`main_handtrack.py: lift_pose_cam3d`) HOT3D cache 에는 depth 가 없다. 그래서
 GT wrist depth 를 써서 lifting 한다. 이렇게 하면 **root depth 오차는 배제되고 WiLoR 의
 2D/articulation 오차만** history 에 남는다. 즉 이 조건도 여전히 낙관적이며, 실제 배포는
 여기에 root depth 오차가 더해진다. 결과를 보고할 때 반드시 함께 밝힌다.

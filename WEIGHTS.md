@@ -1,6 +1,6 @@
 # Model Weights / Checkpoints
 
-이 프로젝트가 사용하는 모델 가중치는 모두 **git에 포함되지 않습니다** (`.gitignore` 처리). 새 환경에서 구동하려면 아래 위치에 파일을 직접 배치해야 합니다. 경로는 모두 repo root 기준입니다.
+이 프로젝트가 사용하는 모델 가중치는 **`pretrained/forecast/`를 제외하고 git에 포함되지 않습니다** (`.gitignore` 처리). 새 환경에서 구동하려면 아래 위치에 파일을 직접 배치해야 합니다. 경로는 모두 repo root 기준입니다.
 
 총 용량 ≈ **16 GB**.
 
@@ -8,7 +8,7 @@
 
 ## 1. Mesh Reconstruction (TRELLIS) — `pretrained/meshrecon/`
 
-소비: [modules/modules_mesh.py](modules/modules_mesh.py) `MeshReconstructor` → 진입점 `main_meshrecon_comm.py`
+소비: [modules/modules_mesh.py](modules/modules_mesh.py) `MeshReconstructor` → 진입점 `main_meshrecon.py`
 로딩: `TrellisImageTo3DPipeline.from_pretrained("pretrained/meshrecon/diffusion")` → `diffusion/pipeline.json`이 아래 파일들을 참조
 
 ### 1-1. 커스텀 학습 가중치 — `pretrained/meshrecon/diffusion/ckpts_new/`
@@ -41,7 +41,7 @@
 | 파일 | 크기 | 소비 | 코드 |
 |---|---|---|---|
 | `yolo_100doh_best.pt` | 20 MB | HoTrack 손-객체 검출 | [modules_hotrack.py:106](modules/modules_hotrack.py#L106) (`InteractiveHoTrackSegmentor`) |
-| `yolo11m.pt` | 39 MB | 객체 검출 `ObjTracker` | [modules_obj.py:16](modules/modules_obj.py#L16) (→ `main_handtrack_comm.py`) |
+| `yolo11m.pt` | 39 MB | 객체 검출 `ObjTracker` | [modules_obj.py:16](modules/modules_obj.py#L16) (→ `main_handtrack.py`) |
 | `yolo11n.pt` | 5.4 MB | (현재 미사용) | — |
 
 > 출처: Ultralytics YOLO11 (`yolo11m.pt`, `yolo11n.pt`). `yolo_100doh_best.pt`는 100DOH 기반 커스텀 학습본.
@@ -105,11 +105,26 @@
 
 | 파일 | 크기 | 소비 |
 |---|---|---|
-| `checkpoint-40.tar` | 13 MB | `GestureClassfier` ([main_handtrack_comm.py:46](main_handtrack_comm.py#L46)) |
+| `checkpoint-40.tar` | 13 MB | `GestureClassfier` ([main_handtrack.py:46](main_handtrack.py#L46)) |
 
 ---
 
-## 6. (참고) weight는 아니지만 git-ignore되는 대용량 데이터
+## 6. Delay-Conditioned Forecasting — `pretrained/forecast/`
+
+소비: [modules/delay_nowcasting/deployment/onnx_runner.py](modules/delay_nowcasting/deployment/onnx_runner.py) `ForecastRunner` → 진입점 `main_handtrack_forecast.py`
+
+| 파일 | 크기 | 학습 도메인 | 비고 |
+|---|---|---|---|
+| `mixed3.onnx` | 858 KB | DexYCB + HOT3D + HOI4D | 기본값 (`--model mixed3`) |
+| `mixed2.onnx` | 858 KB | DexYCB + HOT3D | 비교용 (`--model mixed2`) |
+
+> **이 두 파일만 git에 포함됩니다.** 합쳐 1.7 MB로 작고, 배포 구동에 반드시 필요하기 때문입니다.
+> `.gitignore`의 `!pretrained/forecast/` 예외가 이를 허용합니다.
+> 학습 산출물(`.pt` 체크포인트)과 전처리 데이터셋(parquet)은 `research_data/`에 있고 git에 넣지 않습니다.
+
+---
+
+## 7. (참고) weight는 아니지만 git-ignore되는 대용량 데이터
 
 | 경로 | 내용 |
 |---|---|
@@ -135,4 +150,10 @@ modules/behavior/data/
 _calibration/rm_depth_ahat/*
 output/*
 .env
+research_data/
+*.so
+
+# 예외: forecast 가중치는 커밋한다
+pretrained/*
+!pretrained/forecast/
 ```

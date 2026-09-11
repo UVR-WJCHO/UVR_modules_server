@@ -33,6 +33,7 @@ KW_HL2DATA = b"HL2DATA"              # HL2 -> 서버. RGB/depth 센서 패킷
 KW_SERVER_RESULT = b"SERVER_RESULT"  # 서버 -> HL2. 단일 자세 결과
 KW_HAND_FORECAST = b"HAND_FORECAST"  # 서버 -> HL2. horizon grid 결과
 KW_MESH_RESULT = b"MESH_RESULT"      # 서버 -> HL2. 정합된 합본 GLB
+KW_USER_STATE = b"USER_STATE"        # 서버 -> 구독자. 정량화된 사용자 상태 지표 (JSON)
 
 RECV_TIMEOUT_MS = 500                # rx 소켓 타임아웃. 종료 신호를 확인할 주기
 
@@ -57,6 +58,10 @@ class HubClient:
         self.rx = self.ctx.socket(zmq.DEALER)
         self.rx.setsockopt(zmq.IDENTITY, identity)
         self.rx.setsockopt(zmq.RCVTIMEO, RECV_TIMEOUT_MS)
+        # 브로커가 죽었거나 처음부터 없으면 보내지 못한 메시지가 큐에 남는다. LINGER 가
+        # 기본값(무한)이면 ctx.term() 이 그것들을 기다리며 종료가 걸린다. 종료 시점에
+        # 전달하지 못한 것은 버린다.
+        self.rx.setsockopt(zmq.LINGER, 0)
         self.rx.connect(f"tcp://{host}:{port}")
         self.rx.send_multipart([b"", b"RECV_REG", recv_kw, identity, b"ALL"])
 
@@ -64,6 +69,7 @@ class HubClient:
         if result_kw is not None:
             self.tx = self.ctx.socket(zmq.DEALER)
             self.tx.setsockopt(zmq.IDENTITY, identity + b"_TX")
+            self.tx.setsockopt(zmq.LINGER, 0)
             self.tx.connect(f"tcp://{host}:{port}")
 
         self.q: Queue = Queue(maxsize=1)

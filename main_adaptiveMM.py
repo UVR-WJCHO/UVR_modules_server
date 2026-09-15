@@ -183,6 +183,63 @@ class Imu(_Stream):
             self.recorder.write_imu(self.kind, packet.timestamp, xyz)
 
 
+class _AudioProbe:
+    """오디오가 '갱신되는 것' 과 '맞게 들어오는 것' 을 구분하려고 둔다.
+
+    audio_density 는 무음이 들어와도, 청크가 절반씩 빠져도 계속 갱신된다. 값이 움직이는
+    것만 보고 정상이라 판단할 수 없어서 아래 셋을 따로 잰다.
+
+        samples/s 대 sample_rate   100% 에서 벗어나면 청크가 빠지거나 rate 신고가 틀렸다
+        level (dBFS)               마이크가 죽었는지. 무음이면 -90 dBFS 아래로 깔린다
+        lag                        오디오 timestamp 가 다른 스트림과 같은 축인지.
+                                   일정하면 정상, 블록마다 커지면 기기가 다른 시계로 찍고 있다
+
+    마지막 항목이 특히 중요하다. 축이 어긋나면 값은 멀쩡히 나오다가 창 밖으로 밀리는
+    순간부터 조용히 None 이 된다.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.sample_rate = self.channels = 0
+        self.last_ts = None
+        self._zero()
+
+    def _zero(self):
+        self.chunks = self.samples = 0
+        self.sumsq = 0.0
+        self.peak = 0.0
+
+    def observe(self, pcm, ts, sample_rate, channels):
+        """채널 병합 전 원본을 넣는다. 프레임 수를 세려면 신고된 채널 수가 필요하다."""
+        x = np.asarray(pcm).ravel()
+        if x.size == 0:
+            return
+        if np.issubdtype(x.dtype, np.integer):
+            x = x.astype(np.float32) / float(np.iinfo(x.dtype).max + 1)
+        with self._lock:
+            self.chunks += 1
+            self.samples += x.size
+            self.sumsq += float(np.dot(x, x))
+            self.peak = max(self.peak, float(np.abs(x).max()))
+            self.sample_rate, self.channels = int(sample_rate), int(channels)
+            self.last_ts = ts
+
+    def report(self, now_qpc, elapsed):
+        with self._lock:
+            n, s, sq, pk = self.chunks, self.samples, self.sumsq, self.peak
+            sr, ch, last = self.sample_rate, self.channels, self.last_ts
+            self._zero()
+        if n == 0:
+            return "  audio    수신 없음"
+        db = lambda v: f"{20 * np.log10(v):6.1f}" if v > 1e-9 else "  -inf"
+        fps = s / max(1, ch) / elapsed                 # 초당 프레임(채널 병합 기준)
+        cover = f"{fps / sr * 100:5.1f}%" if sr else "    ?%"
+        lag = (now_qpc - last) / QPC * 1e3
+        return (f"  audio    {sr}Hz/{ch}ch  {n / elapsed:4.1f}chunk/s  "
+                f"{fps:6.0f}frame/s = {cover} of rate  lag {lag:7.1f}ms  "
+                f"rms {db(s and (sq / s) ** 0.5)} peak {db(pk)} dBFS")
+
+
 class Microphone(_Stream):
     """마이크. spectral flux 를 그 자리에서 계산해 audio_density 로 넣는다."""
 
@@ -192,6 +249,7 @@ class Microphone(_Stream):
         super().__init__(host, metrics, recorder)
         self._prev_spectrum = None
         self._opened_wav = False
+        self.audio_probe = _AudioProbe()
 
     def open(self):
         return hl2ss_lnm.rx_microphone(self.host, hl2ss.StreamPort.MICROPHONE)
@@ -200,6 +258,9 @@ class Microphone(_Stream):
         samples = packet.payload
         if not isinstance(samples, np.ndarray):
             return
+        self.audio_probe.observe(samples, packet.timestamp,
+                                 hl2ss.Parameters_MICROPHONE.SAMPLE_RATE,
+                                 hl2ss.Parameters_MICROPHONE.CHANNELS)
         density, self._prev_spectrum = estimate_audio_density(samples, self._prev_spectrum)
         self.metrics.push_audio(packet.timestamp, density)
         if self.recorder is not None:
@@ -296,6 +357,7 @@ class HubSource(threading.Thread):
         self._head = HeadMotion()
         self._wav_open = False
         self.want_audio = want_audio
+        self.audio_probe = _AudioProbe()
 
         # comm_hub 는 source 단위로 구독을 덮어쓰므로 keyword 마다 identity 를 나눈다.
         self.data = HubClient(host, port, recv_kw=KW_HL2DATA,
@@ -416,9 +478,10 @@ class HubSource(threading.Thread):
         pcm = np.frombuffer(a.audio, "<i2")            # int16 little-endian
         if pcm.size == 0:
             return
+        ts = TB.from_nanoseconds(a.start_timestamp)    # ns -> QPC
+        self.audio_probe.observe(pcm, ts, a.sample_rate, max(1, a.channels))
         if a.channels > 1:
             pcm = pcm.reshape(-1, a.channels).mean(axis=1).astype(np.int16)
-        ts = TB.from_nanoseconds(a.start_timestamp)    # ns -> QPC
         # 창 길이를 청크에 맞춘다. 512 샘플에 1024 창을 쓰면 절반이 zero padding 된다.
         n = 1 << max(6, int(pcm.size).bit_length() - 1)
         density, self._prev_spectrum = estimate_audio_density(
@@ -502,12 +565,19 @@ def main() -> None:
                          "(카메라 영상과 정합), display = 사용자 눈 시점. 기본 pv")
     ap.add_argument("--window", type=float, default=2.0, help="지표 집계 창 (초)")
     ap.add_argument("--rate", type=float, default=10.0, help="지표 계산·전송 주기 (Hz)")
+    ap.add_argument("--diag", action="store_true",
+                    help="5 s 마다 스트림 수신율·오디오 상태·지표별 창 샘플 수와 변동폭을 찍는다. "
+                         "값이 갱신되는 것과 제대로 들어오는 것을 구분할 때 쓴다")
     ap.add_argument("--no-audio", action="store_true")
     ap.add_argument("--no-imu", action="store_true")
     args = ap.parse_args()
 
     if args.source == "hl2ss" and not args.hl2:
         ap.error("--source hl2ss 에는 --hl2 <IP> 가 필요하다")
+    if args.source == "hub" and args.mrc:
+        # 조용히 무시하면 원본 카메라 영상을 '사용자가 본 화면' 으로 착각한 채 재게 된다.
+        ap.error("--mrc 는 --source hl2ss 전용이다. hub 경로의 화면은 기기 앱이 "
+                 "image_data 에 담아 보내는 것이고, 서버는 합성에 관여하지 않는다")
 
     # head pose 미분값에는 중력이 없다. hl2ss 의 가속도계 원본에는 있다.
     metrics = StreamingMetrics(window=args.window,
@@ -564,6 +634,35 @@ def main() -> None:
 
 
 
+# 지표 키 -> occupancy 키. gaze 두 지표는 같은 deque 에서 나온다.
+_OCC_KEY = {"visual_clutter": "visual_clutter", "visual_flow": "visual_flow",
+            "audio_density": "audio_density", "gaze_concentration": "gaze",
+            "gaze_spread": "gaze", "head_lin_acc": "head_lin_acc",
+            "head_ang_vel": "head_ang_vel", "hand_acc_L": "hand_L", "hand_acc_R": "hand_R"}
+
+
+def _print_diag(metrics, streams, probe, now_qpc, elapsed, span, prev_n) -> None:
+    """지표가 '움직인다' 를 넘어 '맞게 들어온다' 를 볼 수 있는 만큼만 찍는다.
+
+    n_win 이 0 이면 그 지표는 None 이고, 몇 개뿐이면 값이 나와도 믿을 것이 못 된다.
+    min 과 max 가 같으면 값이 갱신되는 것처럼 보여도 실은 고정돼 있다는 뜻이다.
+    """
+    rate = "  ".join(f"{s.name} {(s.n - prev_n.get(s.name, 0)) / elapsed:5.1f}/s"
+                     for s in streams if getattr(s, "running", False))
+    print(f"  [diag] {elapsed:.1f}s   {rate}", flush=True)
+    if probe is not None:
+        print(probe.report(now_qpc, elapsed), flush=True)
+    occ = metrics.occupancy(now_qpc)
+    print(f"  {'metric':<20}{'n_win':>7}{'min':>11}{'max':>11}", flush=True)
+    for k, ok in _OCC_KEY.items():
+        n = occ[ok]
+        lo_hi = span.get(k)
+        if lo_hi is None:
+            print(f"  {k:<20}{n:>7}{'None':>11}{'':>11}", flush=True)
+        else:
+            print(f"  {k:<20}{n:>7}{lo_hi[0]:>11.4f}{lo_hi[1]:>11.4f}", flush=True)
+
+
 def _loop(args, metrics, recorder, streams, pv, si, hub) -> None:
     """지표 계산·전송·시각화 루프. hub 경로와 hl2ss 경로가 같이 쓴다.
 
@@ -577,6 +676,9 @@ def _loop(args, metrics, recorder, streams, pv, si, hub) -> None:
     last_control = 0.0
     ticks = dropped = 0
     is_hub = isinstance(hub, HubSource)
+    probe = next((s.audio_probe for s in streams if hasattr(s, "audio_probe")), None)
+    span: dict[str, tuple[float, float]] = {}        # --diag: 블록 안 지표 최소/최대
+    prev_n: dict[str, int] = {}                      # --diag: 수신율 계산용 직전 카운트
 
     try:
         while True:
@@ -594,6 +696,13 @@ def _loop(args, metrics, recorder, streams, pv, si, hub) -> None:
                 continue
             values = metrics.current(now_qpc)
             ticks += 1
+
+            if args.diag:
+                for k, v in values.items():
+                    if v is None or np.isnan(v):
+                        continue
+                    lo_hi = span.get(k)
+                    span[k] = (v, v) if lo_hi is None else (min(lo_hi[0], v), max(lo_hi[1], v))
 
             if hub is not None:
                 payload = json.dumps({"timestamp": now_qpc,
@@ -628,9 +737,14 @@ def _loop(args, metrics, recorder, streams, pv, si, hub) -> None:
                 last_control = time.time()
 
             if time.time() - last_log >= 5.0:
+                elapsed = time.time() - last_log
                 alive = ", ".join(f"{s.name}:{s.n}" for s in streams if s.running)
                 drop = f"  hub_dropped={dropped}" if dropped else ""
                 print(f"  ticks={ticks}  {alive}{drop}", flush=True)
+                if args.diag:
+                    _print_diag(metrics, streams, probe, now_qpc, elapsed, span, prev_n)
+                    prev_n = {s.name: s.n for s in streams}
+                    span = {}
                 last_log = time.time()
 
             next_tick += period

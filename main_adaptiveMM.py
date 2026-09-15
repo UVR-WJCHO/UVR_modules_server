@@ -28,6 +28,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from collections import deque
 from datetime import datetime
 
@@ -40,10 +41,15 @@ sys.path.insert(0, os.path.join(_ROOT, "_hl2ss"))
 sys.path.insert(0, os.path.join(_ROOT, "_comm"))
 import hl2ss                                                       # noqa: E402
 import hl2ss_lnm                                                   # noqa: E402
-from hub_client import HubClient, add_broker_args, KW_USER_STATE   # noqa: E402
+import hl2_data_pb2 as hl2proto                                   # noqa: E402
+import hl2_sensors_pb2 as sensproto                               # noqa: E402
+from hub_client import (                                          # noqa: E402
+    HubClient, add_broker_args, KW_USER_STATE,
+    KW_HL2DATA, KW_HL2_AUDIO, KW_HL2_CONTROL)
 
 sys.path.insert(0, _ROOT)
-from modules.adaptivemm import si_adapter                          # noqa: E402
+from modules.adaptivemm import si_adapter, timebase as TB          # noqa: E402
+from modules.adaptivemm.headmotion import HeadMotion               # noqa: E402
 from modules.adaptivemm.audio import estimate_audio_density        # noqa: E402
 from modules.adaptivemm.common import gaze_yaw_pitch               # noqa: E402
 from modules.adaptivemm.head_view import render_head_view          # noqa: E402
@@ -55,6 +61,7 @@ IDENTITY = b"ADAPTIVEMM"
 RECORD_ROOT = os.path.join(_ROOT, "output", "adaptivemm")
 
 PV_WIDTH, PV_HEIGHT, PV_FPS = 640, 360, 30
+CONTROL_PERIOD_S = 5.0   # 기기가 이 주기로 제어를 못 받으면 스트림을 놓는다(기기 타임아웃 15 s)
 GAZE_DISTANCE = 1.5      # 시선 ray 를 찍을 고정 거리(m). 시선에는 깊이가 없다
 QPC = 1e7                # HoloLens QPC ticks per second
 
@@ -237,10 +244,12 @@ class PersonalVideo(_Stream):
         ts = packet.timestamp
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
-        self.metrics.push_clutter(ts, clutter_value(gray))
+        edge, _tex = clutter_value(gray)                 # (edge_density, texture_energy)
+        self.metrics.push_clutter(ts, edge)
         small = to_small(gray)
         if self._prev_small is not None:
-            self.metrics.push_flow(ts, flow_residual(self._prev_small, small))
+            res, _ego = flow_residual(self._prev_small, small)
+            self.metrics.push_flow(ts, res)
         self._prev_small = small
 
         with self._lock:
@@ -258,6 +267,198 @@ class PersonalVideo(_Stream):
             hl2ss_lnm.stop_subsystem_pv(self.host, hl2ss.StreamPort.PERSONAL_VIDEO)
         except Exception:
             pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# comm_hub 경로. 기기 C# 앱이 올리는 것을 구독한다.
+#
+# hl2ss 경로와 다른 점 셋.
+#   - 시각이 Unity Time.time(초) / 오디오는 ns 다. 입구에서 QPC 로 올린다.
+#   - IMU 가 없다. head pose 를 미분해 선형가속도와 각속도를 만든다(중력 없음).
+#   - 오디오가 int16 PCM 이다. audio.estimate_audio_density 가 dtype 을 보고 정규화한다.
+# ─────────────────────────────────────────────────────────────────────────────
+class HubSource(threading.Thread):
+    """HL2DATA(+HL2_AUDIO) 를 구독해 지표에 넣는다. 스트림 스레드들을 대체한다."""
+
+    name = "HUB"
+
+    def __init__(self, host, port, metrics, recorder=None, want_audio=True):
+        super().__init__(daemon=True)
+        self.metrics, self.recorder = metrics, recorder
+        self.running = False
+        self.n = self.n_audio = 0
+        self.trail = deque(maxlen=240)
+        self.latest: si_adapter.SIFrame | None = None
+        self.latest_bgr, self.latest_ts = None, 0
+        self._lock = threading.Lock()
+        self._prev_small = None
+        self._prev_spectrum = None
+        self._head = HeadMotion()
+        self._wav_open = False
+        self.want_audio = want_audio
+
+        # comm_hub 는 source 단위로 구독을 덮어쓰므로 keyword 마다 identity 를 나눈다.
+        self.data = HubClient(host, port, recv_kw=KW_HL2DATA,
+                              result_kw=KW_USER_STATE, identity=IDENTITY)
+        self.data.tx.setsockopt(zmq.SNDTIMEO, 20)
+        self.data.tx.setsockopt(zmq.SNDHWM, 100)
+        self.audio = None
+        if want_audio:
+            # 오디오는 conflate 하면 안 된다. 청크가 빠지면 spectral flux 의 연속성이 깨진다.
+            self.audio = HubClient(host, port, recv_kw=KW_HL2_AUDIO,
+                                   identity=IDENTITY + b"_AUD", queue_size=64)
+
+    # --- 기기 제어 -------------------------------------------------------
+    def send_control(self, send_audio: bool) -> None:
+        msg = sensproto.HL2Control(send_audio=send_audio, send_imu=False)
+        try:
+            self.data.send(msg.SerializeToString(), kw=KW_HL2_CONTROL)
+        except zmq.Again:
+            pass
+
+    # --- 루프 ------------------------------------------------------------
+    def run(self):
+        self.running = True
+        print("[HUB] 구독 시작", flush=True)
+        if self.want_audio:
+            threading.Thread(target=self._audio_loop, daemon=True).start()
+        while self.running:
+            buf = self.data.get_latest(timeout=0.5)
+            if buf is None:
+                continue
+            try:
+                self._on_packet(buf)
+                self.n += 1
+            except Exception:
+                print("[HUB] 패킷 처리 오류\n" + traceback.format_exc(), flush=True)
+        print(f"[HUB] 종료 ({self.n} packets, audio {self.n_audio})", flush=True)
+
+    def _audio_loop(self):
+        while self.running:
+            buf = self.audio.get_latest(timeout=0.5)
+            if buf is None:
+                continue
+            try:
+                self._on_audio(buf)
+                self.n_audio += 1
+            except Exception:
+                print("[HUB] 오디오 오류\n" + traceback.format_exc(), flush=True)
+
+    # --- HL2DATA ---------------------------------------------------------
+    def _on_packet(self, buf):
+        pkt = hl2proto.HL2SensorPacket()
+        pkt.ParseFromString(buf)
+        ts = TB.from_seconds(pkt.timestamp)          # Time.time 초 -> QPC
+
+        # 영상: clutter 와 optical flow
+        if pkt.image_data:
+            arr = np.frombuffer(pkt.image_data, np.uint8)
+            bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if bgr is not None:
+                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+                edge, _tex = clutter_value(gray)         # (edge_density, texture_energy)
+                self.metrics.push_clutter(ts, edge)
+                small = to_small(gray)
+                if self._prev_small is not None:
+                    res, _ego = flow_residual(self._prev_small, small)
+                    self.metrics.push_flow(ts, res)
+                self._prev_small = small
+                with self._lock:
+                    self.latest_bgr, self.latest_ts = bgr, ts
+                if self.recorder is not None:
+                    self.recorder.write_pv(ts, bgr)
+
+        # head 운동: IMU 가 없으므로 pose 를 미분한다. 나온 값에는 중력이 없다.
+        pos = (pkt.head_pos_x, pkt.head_pos_y, pkt.head_pos_z)
+        rot = (pkt.head_rot_x, pkt.head_rot_y, pkt.head_rot_z, pkt.head_rot_w)
+        d = self._head.push(float(pkt.timestamp), pos, rot)
+        if d is not None:
+            lin, ang = d
+            self.metrics.push_accel(ts, lin[None, :])
+            self.metrics.push_gyro(ts, ang[None, :])
+
+        # SI: 시선과 손. 기기가 쿼터니언으로 주므로 forward/up 을 만들어 쓴다.
+        f = si_adapter.SIFrame(ts)
+        f.head_position = np.array(pos, np.float32)
+        fwd, up = _quat_axes(rot)
+        f.head_forward, f.head_up = fwd, up
+        if any((pkt.eye_gaze_dir_x, pkt.eye_gaze_dir_y, pkt.eye_gaze_dir_z)):
+            f.eye_origin = np.array((pkt.eye_gaze_origin_x, pkt.eye_gaze_origin_y,
+                                     pkt.eye_gaze_origin_z), np.float32)
+            f.eye_direction = np.array((pkt.eye_gaze_dir_x, pkt.eye_gaze_dir_y,
+                                        pkt.eye_gaze_dir_z), np.float32)
+            yaw, pitch = gaze_yaw_pitch(f.eye_direction, fwd, up)
+            self.metrics.push_gaze(ts, yaw, pitch)
+
+        for side, joints in (("L", pkt.left_hand), ("R", pkt.right_hand)):
+            if len(joints) >= 3:
+                P = np.asarray(joints, np.float32).reshape(-1, 3)
+                self.metrics.push_hand(side, ts, P[0], True)
+                h = {"position": P, "orientation": np.zeros((len(P), 4), np.float32)}
+                if side == "L":
+                    f.hand_left = h
+                else:
+                    f.hand_right = h
+            else:
+                self.metrics.push_hand(side, ts, (np.nan,) * 3, False)
+
+        self.trail.append(f.head_position)
+        self.latest = f
+        if self.recorder is not None:
+            self.recorder.write_si(f)
+
+    # --- HL2_AUDIO -------------------------------------------------------
+    def _on_audio(self, buf):
+        a = sensproto.HL2Audio()
+        a.ParseFromString(buf)
+        if a.is_aac:
+            return                                    # 기기는 현재 raw PCM 만 보낸다
+        pcm = np.frombuffer(a.audio, "<i2")            # int16 little-endian
+        if pcm.size == 0:
+            return
+        if a.channels > 1:
+            pcm = pcm.reshape(-1, a.channels).mean(axis=1).astype(np.int16)
+        ts = TB.from_nanoseconds(a.start_timestamp)    # ns -> QPC
+        # 창 길이를 청크에 맞춘다. 512 샘플에 1024 창을 쓰면 절반이 zero padding 된다.
+        n = 1 << max(6, int(pcm.size).bit_length() - 1)
+        density, self._prev_spectrum = estimate_audio_density(
+            pcm, self._prev_spectrum, window_size=n)
+        self.metrics.push_audio(ts, density)
+        if self.recorder is not None:
+            if not self._wav_open:
+                self.recorder.open_audio(1, a.sample_rate or 16000, sampwidth=2)
+                self._wav_open = True
+            self.recorder.write_audio_raw(pcm.tobytes())
+
+    def send(self, payload: bytes) -> None:
+        """지표 업로드. _loop 가 hub 와 같은 인터페이스로 쓴다."""
+        self.data.send(payload)
+
+    def snapshot(self):
+        with self._lock:
+            return (None, 0) if self.latest_bgr is None else (self.latest_bgr.copy(), self.latest_ts)
+
+    def stop(self):
+        self.running = False
+
+    def close(self):
+        self.data.close()
+        if self.audio is not None:
+            self.audio.close()
+
+
+def _quat_axes(q):
+    """(x, y, z, w) -> (forward, up). Unity 규약대로 +Z 가 forward, +Y 가 up."""
+    x, y, z, w = (float(v) for v in q)
+    n = (x * x + y * y + z * z + w * w) ** 0.5
+    if n < 1e-6:
+        return np.array([0, 0, 1], np.float32), np.array([0, 1, 0], np.float32)
+    x, y, z, w = x / n, y / n, z / n, w / n
+    fwd = np.array([2 * (x * z + w * y), 2 * (y * z - w * x),
+                    1 - 2 * (x * x + y * y)], np.float32)
+    up = np.array([2 * (x * y - w * z), 1 - 2 * (x * x + z * z),
+                   2 * (y * z + w * x)], np.float32)
+    return fwd, up
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -284,7 +485,10 @@ def draw_gaze(bgr, si_frame):
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="HL2 사용자 상태 정량화 (실시간 + 녹화)")
-    ap.add_argument("--hl2", required=True, help="HoloLens2 IP (hl2ss 서버 주소)")
+    ap.add_argument("--source", choices=("hub", "hl2ss"), default="hub",
+                    help="hub = 기기 C# 앱이 comm_hub 로 올리는 것을 구독 (기본). "
+                         "hl2ss = HL2 에 직접 연결. 진짜 IMU 를 쓸 수 있으나 앱이 따로 필요하다")
+    ap.add_argument("--hl2", default=None, help="HoloLens2 IP. --source hl2ss 에서만 쓴다")
     add_broker_args(ap)
     ap.add_argument("--no-hub", action="store_true", help="comm_hub 로 지표를 보내지 않는다")
     ap.add_argument("--record", action="store_true", help="세션을 output/adaptivemm/ 에 녹화")
@@ -302,7 +506,12 @@ def main() -> None:
     ap.add_argument("--no-imu", action="store_true")
     args = ap.parse_args()
 
-    metrics = StreamingMetrics(window=args.window)
+    if args.source == "hl2ss" and not args.hl2:
+        ap.error("--source hl2ss 에는 --hl2 <IP> 가 필요하다")
+
+    # head pose 미분값에는 중력이 없다. hl2ss 의 가속도계 원본에는 있다.
+    metrics = StreamingMetrics(window=args.window,
+                               accel_has_gravity=(args.source == "hl2ss"))
 
     recorder = None
     if args.record:
@@ -313,6 +522,18 @@ def main() -> None:
             "hologram_perspective": args.hologram_perspective if args.mrc else None,
             "window_s": args.window, "rate_hz": args.rate})
         print(f"녹화 -> {recorder.dir}", flush=True)
+
+    if args.source == "hub":
+        src = HubSource(args.host, args.port, metrics, recorder,
+                        want_audio=not args.no_audio)
+        src.start()
+        src.send_control(send_audio=not args.no_audio)
+        streams = [src]
+        pv = si = src
+        hub = None                                   # 지표 업로드는 src 가 겸한다
+        print(f"comm_hub {args.host}:{args.port} 구독. 제어 재전송 {CONTROL_PERIOD_S}s",
+              flush=True)
+        return _loop(args, metrics, recorder, streams, pv, si, src)
 
     hub = None
     if not args.no_hub:
@@ -339,16 +560,38 @@ def main() -> None:
         streams.append(Microphone(args.hl2, metrics, recorder))
     for s in streams:
         s.start()
+    _loop(args, metrics, recorder, streams, pv, si, hub)
 
+
+
+def _loop(args, metrics, recorder, streams, pv, si, hub) -> None:
+    """지표 계산·전송·시각화 루프. hub 경로와 hl2ss 경로가 같이 쓴다.
+
+    pv 는 snapshot() 을, si 는 latest/trail 을 제공하면 된다. hub 경로에서는 HubSource
+    하나가 셋을 다 겸한다.
+    """
     print(f"지표 창 {args.window}s, 전송 {args.rate} Hz. q 또는 ESC 로 종료.", flush=True)
     period = 1.0 / args.rate
     next_tick = time.time()
     last_log = time.time()
+    last_control = 0.0
     ticks = dropped = 0
+    is_hub = isinstance(hub, HubSource)
 
     try:
         while True:
-            now_qpc = int(time.time() * QPC)          # 표시용. 지표는 패킷 QPC 로 판단한다
+            # '지금' 은 벽시계가 아니라 가장 최근 패킷의 시각이다. 패킷 timestamp 의 원점은
+            # 앱 기동(hub) 또는 기기 부팅(hl2ss) 이라 epoch 와 축이 다르다. 벽시계를 쓰면
+            # 모든 샘플이 창 밖으로 밀려 지표가 전부 NaN 이 된다.
+            now_qpc = metrics.latest_timestamp
+            if now_qpc is None:                      # 아직 한 프레임도 안 왔다
+                # 스트림이 전부 open 에 실패했다면(IP 오타 등) 기다려도 오지 않는다.
+                # HubSource 에는 error 속성이 없으므로 hub 경로는 여기 걸리지 않는다.
+                if streams and all(getattr(s, "error", None) is not None for s in streams):
+                    print("모든 스트림 연결 실패. 주소와 기기 앱 상태를 확인하라.", flush=True)
+                    return
+                time.sleep(period)
+                continue
             values = metrics.current(now_qpc)
             ticks += 1
 
@@ -378,6 +621,12 @@ def main() -> None:
                 if (cv2.waitKey(1) & 0xFF) in (ord("q"), 27):
                     break
 
+            # 기기는 제어를 일정 시간 못 받으면 스트림을 놓는다. 브로커가 조용히 사라져도
+            # 기기가 마이크를 계속 잡고 있지 않도록 주기적으로 다시 보낸다.
+            if is_hub and time.time() - last_control >= CONTROL_PERIOD_S:
+                hub.send_control(send_audio=not args.no_audio)
+                last_control = time.time()
+
             if time.time() - last_log >= 5.0:
                 alive = ", ".join(f"{s.name}:{s.n}" for s in streams if s.running)
                 drop = f"  hub_dropped={dropped}" if dropped else ""
@@ -389,6 +638,9 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n중단", flush=True)
     finally:
+        if is_hub:
+            hub.send_control(send_audio=False)       # 기기가 마이크를 즉시 놓게 한다
+            time.sleep(0.2)
         for s in streams:
             s.stop()
         for s in streams:

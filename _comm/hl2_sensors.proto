@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+// 온디맨드 센서 스트림. HL2SensorPacket(hl2_data.proto) 과 별개 채널이다.
+//
+// 왜 나눴나: 오디오를 30 Hz PV 프레임에 끼워 넣으면 (a) PV 가 드롭될 때 그 구간 오디오도
+// 함께 사라지고, (b) 연속 스트림이 33 ms 단위로 뭉쳐지며, (c) 오디오를 쓰지 않는 기존
+// 진입점까지 그 바이트를 받게 된다. comm_hub 는 keyword 별로 큐를 나누므로 따로 두면
+// 서로 막지 않는다.
+//
+// keyword
+//   HL2_CONTROL  서버 -> 기기   어떤 스트림을 켤지
+//   HL2_AUDIO    기기 -> 서버   오디오 청크
+//   HL2_IMU      기기 -> 서버   (현재 미사용. 아래 HL2Imu 주석 참조)
+//
+// 시각 규약: 모든 timestamp 는 HL2SensorPacket.timestamp 와 같은 원점·같은 축이다.
+// HL2SensorPacket.timestamp 는 Unity Time.time(앱 기동 후 경과 초, float32) 이고,
+// 여기의 정수 필드는 나노초다. 초로 보려면 1e9 로 나눈다.
+
+// 서버 -> 기기. 주기적으로 재전송된다(5 s). 기기는 일정 시간 못 받으면 스트림을 놓는다.
+message HL2Control {
+  bool  send_audio       = 1;
+  bool  send_imu         = 2;   // 현재 기기가 무시한다
+  int32 imu_rate_divisor = 3;   // 0 또는 1 = 전부. 선택 구현
+}
+
+// 기기 -> 서버. 마이크 청크.
+//
+// 현재 기기 구현: raw PCM int16 little-endian, mono, 16 kHz, 32 ms 청크 (~32 KB/s).
+// sample_rate 를 하드코딩하지 말 것 — 기기가 16 kHz 를 열지 못하면 네이티브 레이트로
+// 그대로 보낸다(리샘플링은 스펙트럼을 왜곡해 spectral flux 를 망치므로 하지 않는다).
+message HL2Audio {
+  bytes audio           = 1;
+  int32 sample_rate     = 2;   // 이 필드가 진실이다
+  int32 channels        = 3;
+  int64 start_timestamp = 4;   // 이 청크 첫 샘플의 시각, 나노초
+  bool  is_aac          = 5;   // false = raw PCM int16 LE
+}
+
+// 기기 -> 서버. 현재 채워지지 않는다.
+//
+// HL2 의 accel/gyro 가 기기 앱의 C# 경로로 들어오지 않는다(HL2UnityPlugin 에 심볼이 없고,
+// hl2ss.dll 은 TCP 포트로만 서브한다). 대신 서버가 매 패킷의 head_pos_*/head_rot_* 를
+// 미분해 선형가속도와 각속도를 만든다(modules/adaptivemm/headmotion.py).
+//
+// 그 값에는 중력이 없다. 가속도계가 아니라 기구학적 미분이기 때문이다. 대역폭도 30 Hz
+// 전송이라 나이퀴스트 15 Hz 까지다. 고주파 성분이 필요해지면 이 메시지를 되살린다.
+message HL2Imu {
+  repeated float accel    = 1;   // xyz * N, flattened
+  repeated float gyro     = 2;   // xyz * M, flattened
+  repeated int64 accel_ts = 3;   // 샘플별 시각(ns), 길이 N
+  repeated int64 gyro_ts  = 4;   // 길이 M
+}

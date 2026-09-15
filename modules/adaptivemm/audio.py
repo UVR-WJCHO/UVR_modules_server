@@ -22,7 +22,13 @@ def estimate_audio_density(frame, prev_spectrum, window_size=1024, scaling_facto
     반환 (density, current_spectrum). density = Σ max(0, |cur| − |prev|) × scaling_factor.
     상태(previousSpectrum)는 호출자가 반환된 current_spectrum을 넘겨받아 관리한다.
     """
-    x = np.asarray(frame, np.float32)
+    x = np.asarray(frame)
+    if np.issubdtype(x.dtype, np.integer):
+        # 기기에서 오는 PCM 은 int16 이다. hl2ss 가 AAC 를 디코드해 주던 float(+-1.0) 과
+        # 스케일이 32768 배 달라, 그대로 FFT 하면 density 가 표시 상한에 바로 붙는다.
+        x = x.astype(np.float32) / float(np.iinfo(x.dtype).max + 1)
+    else:
+        x = x.astype(np.float32)
     if x.ndim > 1:
         x = x.mean(axis=0)           # 다채널 -> 모노
     n = window_size

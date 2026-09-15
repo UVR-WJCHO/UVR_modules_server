@@ -14,8 +14,17 @@ from . import haptic
 
 
 class StreamingMetrics:
-    def __init__(self, window=2.0):
+    def __init__(self, window=2.0, accel_has_gravity=True):
+        """accel_has_gravity: push_accel 로 들어오는 값에 중력이 섞여 있는가.
+
+        가속도계 원본(hl2ss RM_IMU)은 True 다. 정지 상태에서도 1 g 가 나오므로
+        moving average 로 저주파를 빼야 선형가속도가 남는다.
+
+        head pose 를 미분한 값은 False 다. 기구학적 미분이라 중력이 애초에 없고,
+        여기서 저주파를 빼면 실제 저주파 운동을 지워 지표가 조용히 틀린다.
+        """
         self.W = window
+        self.accel_has_gravity = accel_has_gravity
         self._lock = threading.Lock()
         self._acc = deque()   # (ts, xyz[N,3])  per packet
         self._gyr = deque()   # (ts, xyz[N,3])
@@ -24,6 +33,21 @@ class StreamingMetrics:
         self._flow = deque()  # (ts, residual flow px/s)
         self._aud = deque()   # (ts, density)
         self._gaze = deque()  # (ts, yaw, pitch)  head 기준 deg
+        self._latest = None   # 가장 최근에 들어온 timestamp. '지금' 의 기준이다
+
+    @property
+    def latest_timestamp(self):
+        """가장 최근 샘플의 시각. `current()` 에 넘길 '지금' 이다.
+
+        벽시계를 쓰면 안 된다. 패킷 timestamp 의 원점은 앱 기동(또는 기기 부팅)이라
+        Unix epoch 와 축이 다르고, 그대로 빼면 창 밖으로 전부 밀려 모든 지표가 NaN 이 된다.
+        """
+        with self._lock:
+            return self._latest
+
+    def _mark(self, ts):
+        if self._latest is None or ts > self._latest:
+            self._latest = ts
 
     def _trim(self, dq, now):
         lo = now - (self.W + 0.5) * C.QPC
@@ -35,36 +59,43 @@ class StreamingMetrics:
         with self._lock:
             self._acc.append((ts, np.asarray(xyz, np.float32)))
             self._trim(self._acc, ts)
+            self._mark(ts)
 
     def push_gyro(self, ts, xyz):
         with self._lock:
             self._gyr.append((ts, np.asarray(xyz, np.float32)))
             self._trim(self._gyr, ts)
+            self._mark(ts)
 
     def push_hand(self, side, ts, pos, valid):
         with self._lock:
             self._hand[side].append((ts, float(pos[0]), float(pos[1]), float(pos[2]), bool(valid)))
             self._trim(self._hand[side], ts)
+            self._mark(ts)
 
     def push_clutter(self, ts, clutter):
         with self._lock:
             self._vis.append((ts, float(clutter)))
             self._trim(self._vis, ts)
+            self._mark(ts)
 
     def push_flow(self, ts, flow):
         with self._lock:
             self._flow.append((ts, float(flow)))
             self._trim(self._flow, ts)
+            self._mark(ts)
 
     def push_audio(self, ts, density):
         with self._lock:
             self._aud.append((ts, float(density)))
             self._trim(self._aud, ts)
+            self._mark(ts)
 
     def push_gaze(self, ts, yaw, pitch):
         with self._lock:
             self._gaze.append((ts, float(yaw), float(pitch)))
             self._trim(self._gaze, ts)
+            self._mark(ts)
 
     # ---- read (메인 루프에서 호출) ----
     def current(self, now):
@@ -106,7 +137,7 @@ class StreamingMetrics:
         if acc_w and sum(len(x) for _, x in acc_w) >= 10:
             A = np.vstack([x for _, x in acc_w])
             sts = np.concatenate([np.full(len(x), t) for t, x in acc_w])
-            lin = A - C.moving_average(A, max(1, A.shape[0] // 2))
+            lin = A - C.moving_average(A, max(1, A.shape[0] // 2)) if self.accel_has_gravity else A
             out['head_lin_acc'] = C._weighted_stat(sts, np.linalg.norm(lin, axis=1), now, hl, 'rms')
         else:
             out['head_lin_acc'] = np.nan

@@ -149,9 +149,16 @@ class SessionRecorder:
             self._wav.setframerate(sample_rate)
 
     def write_audio(self, samples: np.ndarray) -> None:
+        """float32 샘플. hl2ss 경로가 디코드해 주는 형태다."""
         with self._wav_lock:
             if self._wav is not None:
                 self._wav.writeframes(np.asarray(samples, np.float32).tobytes())
+
+    def write_audio_raw(self, frames: bytes) -> None:
+        """이미 PCM 바이트인 경우. 기기에서 오는 int16 을 변환 없이 그대로 쓴다."""
+        with self._wav_lock:
+            if self._wav is not None:
+                self._wav.writeframes(frames)
 
     # --- 종료 --------------------------------------------------------------
     def close(self) -> dict:

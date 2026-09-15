@@ -34,6 +34,9 @@ KW_SERVER_RESULT = b"SERVER_RESULT"  # 서버 -> HL2. 단일 자세 결과
 KW_HAND_FORECAST = b"HAND_FORECAST"  # 서버 -> HL2. horizon grid 결과
 KW_MESH_RESULT = b"MESH_RESULT"      # 서버 -> HL2. 정합된 합본 GLB
 KW_USER_STATE = b"USER_STATE"        # 서버 -> 구독자. 정량화된 사용자 상태 지표 (JSON)
+KW_HL2_CONTROL = b"HL2_CONTROL"      # 서버 -> HL2. 온디맨드 스트림 on/off
+KW_HL2_AUDIO = b"HL2_AUDIO"          # HL2 -> 서버. 마이크 청크
+KW_HL2_IMU = b"HL2_IMU"              # HL2 -> 서버. (현재 미사용)
 
 RECV_TIMEOUT_MS = 500                # rx 소켓 타임아웃. 종료 신호를 확인할 주기
 
@@ -45,12 +48,17 @@ class HubClient:
         host, port:  comm_hub 주소
         recv_kw:     구독할 keyword
         result_kw:   업로드할 keyword. None 이면 송신 소켓을 열지 않는다(읽기 전용)
-        identity:    DEALER identity. 진입점마다 달라야 한다
+        identity:    DEALER identity. 진입점마다 달라야 한다. comm_hub 는 source 단위로
+                     구독을 덮어쓰므로, 한 프로세스가 여러 keyword 를 구독하려면 클라이언트
+                     마다 identity 가 달라야 한다
+        queue_size:  1 이면 최신 한 프레임만 남긴다(conflate). 프레임을 건너뛰어도 되는
+                     영상에는 이쪽이 맞다. 오디오처럼 연속성이 필요한 스트림은 더 크게 잡아
+                     중간 청크가 버려지지 않게 한다
     """
 
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
                  recv_kw: bytes = KW_HL2DATA, result_kw: bytes | None = None,
-                 identity: bytes = b"CLIENT"):
+                 identity: bytes = b"CLIENT", queue_size: int = 1):
         self.ctx = zmq.Context()
         self.identity = identity
         self.result_kw = result_kw
@@ -72,7 +80,7 @@ class HubClient:
             self.tx.setsockopt(zmq.LINGER, 0)
             self.tx.connect(f"tcp://{host}:{port}")
 
-        self.q: Queue = Queue(maxsize=1)
+        self.q: Queue = Queue(maxsize=max(1, queue_size))
         self.n_arrived = 0      # 브로커에서 실제로 도착한 프레임
         self.n_dropped = 0      # 루프가 처리 중이라 버린 프레임
         self._fid = 0
@@ -112,12 +120,16 @@ class HubClient:
         except Empty:
             return None
 
-    def send(self, payload: bytes) -> None:
-        """결과를 result_kw 로 업로드한다. frame id 는 내부에서 매긴다."""
+    def send(self, payload: bytes, kw: bytes | None = None) -> None:
+        """업로드한다. kw 를 주면 그 keyword 로, 아니면 result_kw 로 간다.
+
+        UPLOAD 프레임이 keyword 를 실어 나르므로 소켓 하나로 여러 채널에 올릴 수 있다.
+        지표(USER_STATE)와 기기 제어(HL2_CONTROL)처럼 방향이 같고 성격만 다른 경우에 쓴다.
+        """
         if self.tx is None:
             raise RuntimeError("result_kw 없이 만든 클라이언트는 송신할 수 없다")
         self._fid += 1
-        self.tx.send_multipart([b"", b"UPLOAD", self.result_kw, self.identity,
+        self.tx.send_multipart([b"", b"UPLOAD", kw or self.result_kw, self.identity,
                                 str(self._fid).encode(), payload])
 
     def close(self) -> None:

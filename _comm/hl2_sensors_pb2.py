@@ -13,7 +13,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11hl2_sensors.proto\"L\n\nHL2Control\x12\x12\n\nsend_audio\x18\x01 \x01(\x08\x12\x10\n\x08send_imu\x18\x02 \x01(\x08\x12\x18\n\x10imu_rate_divisor\x18\x03 \x01(\x05\"i\n\x08HL2Audio\x12\r\n\x05\x61udio\x18\x01 \x01(\x0c\x12\x13\n\x0bsample_rate\x18\x02 \x01(\x05\x12\x10\n\x08\x63hannels\x18\x03 \x01(\x05\x12\x17\n\x0fstart_timestamp\x18\x04 \x01(\x03\x12\x0e\n\x06is_aac\x18\x05 \x01(\x08\"H\n\x06HL2Imu\x12\r\n\x05\x61\x63\x63\x65l\x18\x01 \x03(\x02\x12\x0c\n\x04gyro\x18\x02 \x03(\x02\x12\x10\n\x08\x61\x63\x63\x65l_ts\x18\x03 \x03(\x03\x12\x0f\n\x07gyro_ts\x18\x04 \x03(\x03\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11hl2_sensors.proto\"a\n\nHL2Control\x12\x12\n\nsend_audio\x18\x01 \x01(\x08\x12\x10\n\x08send_imu\x18\x02 \x01(\x08\x12\x18\n\x10imu_rate_divisor\x18\x03 \x01(\x05\x12\x13\n\x0bsend_render\x18\x04 \x01(\x08\"i\n\x08HL2Audio\x12\r\n\x05\x61udio\x18\x01 \x01(\x0c\x12\x13\n\x0bsample_rate\x18\x02 \x01(\x05\x12\x10\n\x08\x63hannels\x18\x03 \x01(\x05\x12\x17\n\x0fstart_timestamp\x18\x04 \x01(\x03\x12\x0e\n\x06is_aac\x18\x05 \x01(\x08\"H\n\x06HL2Imu\x12\r\n\x05\x61\x63\x63\x65l\x18\x01 \x03(\x02\x12\x0c\n\x04gyro\x18\x02 \x03(\x02\x12\x10\n\x08\x61\x63\x63\x65l_ts\x18\x03 \x03(\x03\x12\x0f\n\x07gyro_ts\x18\x04 \x03(\x03\"_\n\tHL2Render\x12\r\n\x05image\x18\x01 \x01(\x0c\x12\r\n\x05width\x18\x02 \x01(\x05\x12\x0e\n\x06height\x18\x03 \x01(\x05\x12\x11\n\ttimestamp\x18\x04 \x01(\x02\x12\x11\n\thas_alpha\x18\x05 \x01(\x08\x62\x06proto3')
 
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, globals())
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'hl2_sensors_pb2', globals())
@@ -21,9 +21,11 @@ if _descriptor._USE_C_DESCRIPTORS == False:
 
   DESCRIPTOR._options = None
   _HL2CONTROL._serialized_start=21
-  _HL2CONTROL._serialized_end=97
-  _HL2AUDIO._serialized_start=99
-  _HL2AUDIO._serialized_end=204
-  _HL2IMU._serialized_start=206
-  _HL2IMU._serialized_end=278
+  _HL2CONTROL._serialized_end=118
+  _HL2AUDIO._serialized_start=120
+  _HL2AUDIO._serialized_end=225
+  _HL2IMU._serialized_start=227
+  _HL2IMU._serialized_end=299
+  _HL2RENDER._serialized_start=301
+  _HL2RENDER._serialized_end=396
 # @@protoc_insertion_point(module_scope)

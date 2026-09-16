@@ -45,7 +45,7 @@ import hl2_data_pb2 as hl2proto                                   # noqa: E402
 import hl2_sensors_pb2 as sensproto                               # noqa: E402
 from hub_client import (                                          # noqa: E402
     HubClient, add_broker_args, KW_USER_STATE,
-    KW_HL2DATA, KW_HL2_AUDIO, KW_HL2_CONTROL)
+    KW_HL2DATA, KW_HL2_AUDIO, KW_HL2_CONTROL, KW_HL2_RENDER)
 
 sys.path.insert(0, _ROOT)
 from modules.adaptivemm import si_adapter, timebase as TB          # noqa: E402
@@ -184,18 +184,12 @@ class Imu(_Stream):
 
 
 class _AudioProbe:
-    """오디오가 '갱신되는 것' 과 '맞게 들어오는 것' 을 구분하려고 둔다.
-
-    audio_density 는 무음이 들어와도, 청크가 절반씩 빠져도 계속 갱신된다. 값이 움직이는
-    것만 보고 정상이라 판단할 수 없어서 아래 셋을 따로 잰다.
+    """audio_density 는 무음이 들어와도 청크가 절반씩 빠져도 계속 갱신된다. 그래서 따로 잰다.
 
         samples/s 대 sample_rate   100% 에서 벗어나면 청크가 빠지거나 rate 신고가 틀렸다
-        level (dBFS)               마이크가 죽었는지. 무음이면 -90 dBFS 아래로 깔린다
+        level (dBFS)               마이크가 죽었는지
         lag                        오디오 timestamp 가 다른 스트림과 같은 축인지.
-                                   일정하면 정상, 블록마다 커지면 기기가 다른 시계로 찍고 있다
-
-    마지막 항목이 특히 중요하다. 축이 어긋나면 값은 멀쩡히 나오다가 창 밖으로 밀리는
-    순간부터 조용히 None 이 된다.
+                                   일정하면 정상(마이크 파이프라인 지연), 커지면 축이 다르다
     """
 
     def __init__(self):
@@ -338,12 +332,85 @@ class PersonalVideo(_Stream):
 #   - IMU 가 없다. head pose 를 미분해 선형가속도와 각속도를 만든다(중력 없음).
 #   - 오디오가 int16 PCM 이다. audio.estimate_audio_density 가 dtype 을 보고 정규화한다.
 # ─────────────────────────────────────────────────────────────────────────────
+RENDER_LAG_FRAMES = 3     # 레이어는 GPU 비동기 읽기 때문에 1~2 프레임 늦게 온다
+
+
+class _RenderStats:
+    """AR 레이어가 실제로 얼마나 오고 몇 프레임이 짝을 찾는지.
+
+    도달률은 기기에 물어볼 것이 아니라 여기서 재면 된다. 짝을 못 찾은 프레임은 raw 로
+    계산되므로, unpaired 가 많으면 '화면 기준' 이 아니라 '카메라 기준' 지표를 보고 있는 것이다.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.total_arrived = self.total_paired = 0
+        self._zero()
+
+    def _zero(self):
+        self.arrived = self.nbytes = self.paired = self.unpaired = 0
+
+    def on_arrival(self, nbytes):
+        with self._lock:
+            self.arrived += 1
+            self.nbytes += nbytes
+            self.total_arrived += 1
+
+    def on_frame(self, paired):
+        with self._lock:
+            if paired:
+                self.paired += 1
+                self.total_paired += 1
+            else:
+                self.unpaired += 1
+
+    def status(self, elapsed):
+        """평상시 로그용. (한 줄 요약, 경고 또는 None).
+
+        '안 온다' 와 '와도 짝이 안 맞는다' 는 둘 다 조용히 raw 로 떨어져 증상이 같다.
+        원인이 다르므로 구분해서 알린다.
+        """
+        with self._lock:
+            a, pr, u = self.arrived, self.paired, self.unpaired
+            ta = self.total_arrived
+        tot = pr + u
+        if a == 0:
+            return ("render 없음",
+                    "AR 레이어가 오지 않는다. 기기가 HL2_CONTROL(send_render) 을 받았는지, "
+                    "그 빌드에 레이어 전송이 들어갔는지 확인하라. 지금은 raw 로 재고 있다."
+                    if ta == 0 else
+                    "AR 레이어가 끊겼다. 지금은 raw 로 재고 있다.")
+        rate = pr / tot * 100 if tot else 0.0
+        line = f"render {a / elapsed:.1f}/s paired {rate:.0f}%"
+        if tot and rate < 50:
+            return (line,
+                    "레이어는 오는데 짝이 안 맞는다. 기기가 HL2SensorPacket.timestamp 를 "
+                    "그대로 echo 하지 않고 다시 계산하는지 확인하라.")
+        return (line, None)
+
+    def roll(self):
+        """블록 경계. status 와 report 가 같은 구간을 보도록 리셋은 여기서만 한다."""
+        with self._lock:
+            self._zero()
+
+    def report(self, elapsed):
+        with self._lock:
+            a, b, pr, u = self.arrived, self.nbytes, self.paired, self.unpaired
+        tot = pr + u
+        if a == 0 and tot == 0:
+            return "  render   수신 없음"
+        rate = f"{pr / tot * 100:5.1f}%" if tot else "     -"
+        return (f"  render   {a / elapsed:4.1f}layer/s  {b / elapsed / 1024:6.1f}KB/s  "
+                f"{b / max(1, a) / 1024:5.1f}KB/layer  paired {rate} ({pr}/{tot})")
+
+
 class HubSource(threading.Thread):
     """HL2DATA(+HL2_AUDIO) 를 구독해 지표에 넣는다. 스트림 스레드들을 대체한다."""
 
     name = "HUB"
 
-    def __init__(self, host, port, metrics, recorder=None, want_audio=True):
+    def __init__(self, host, port, metrics, recorder=None, want_audio=True,
+                 want_render=False):
         super().__init__(daemon=True)
         self.metrics, self.recorder = metrics, recorder
         self.running = False
@@ -357,7 +424,18 @@ class HubSource(threading.Thread):
         self._head = HeadMotion()
         self._wav_open = False
         self.want_audio = want_audio
+        self.want_render = want_render
         self.audio_probe = _AudioProbe()
+        self.render_stats = _RenderStats()
+        # 레이어가 늦게 오므로 PV 를 조금 붙들었다가 짝을 맞춰 처리한다. 즉시 처리하면
+        # 짝이 항상 비어 있어 레이어가 한 번도 쓰이지 않는다.
+        self._vis_lock = threading.Lock()
+        self._pending = deque()          # (ts_float, ts_qpc, bgr). 도착 순 = timestamp 순
+        self._layers = {}                # ts_float -> (bgra, png bytes)
+        self._last_vis_ts = None         # 이미 처리한 가장 최근 프레임 시각(초)
+        self._alpha_checked = False
+        self._render_logged = False
+        self._size_warned = False
 
         # comm_hub 는 source 단위로 구독을 덮어쓰므로 keyword 마다 identity 를 나눈다.
         self.data = HubClient(host, port, recv_kw=KW_HL2DATA,
@@ -369,10 +447,16 @@ class HubSource(threading.Thread):
             # 오디오는 conflate 하면 안 된다. 청크가 빠지면 spectral flux 의 연속성이 깨진다.
             self.audio = HubClient(host, port, recv_kw=KW_HL2_AUDIO,
                                    identity=IDENTITY + b"_AUD", queue_size=64)
+        self.render = None
+        if want_render:
+            # 레이어도 conflate 하면 안 된다. 빠진 프레임은 raw 로 떨어져 지표가 섞인다.
+            self.render = HubClient(host, port, recv_kw=KW_HL2_RENDER,
+                                    identity=IDENTITY + b"_RND", queue_size=16)
 
     # --- 기기 제어 -------------------------------------------------------
-    def send_control(self, send_audio: bool) -> None:
-        msg = sensproto.HL2Control(send_audio=send_audio, send_imu=False)
+    def send_control(self, send_audio: bool, send_render: bool = False) -> None:
+        msg = sensproto.HL2Control(send_audio=send_audio, send_imu=False,
+                                   send_render=send_render)
         try:
             self.data.send(msg.SerializeToString(), kw=KW_HL2_CONTROL)
         except zmq.Again:
@@ -384,6 +468,8 @@ class HubSource(threading.Thread):
         print("[HUB] 구독 시작", flush=True)
         if self.want_audio:
             threading.Thread(target=self._audio_loop, daemon=True).start()
+        if self.want_render:
+            threading.Thread(target=self._render_loop, daemon=True).start()
         while self.running:
             buf = self.data.get_latest(timeout=0.5)
             if buf is None:
@@ -417,18 +503,9 @@ class HubSource(threading.Thread):
             arr = np.frombuffer(pkt.image_data, np.uint8)
             bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if bgr is not None:
-                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-                edge, _tex = clutter_value(gray)         # (edge_density, texture_energy)
-                self.metrics.push_clutter(ts, edge)
-                small = to_small(gray)
-                if self._prev_small is not None:
-                    res, _ego = flow_residual(self._prev_small, small)
-                    self.metrics.push_flow(ts, res)
-                self._prev_small = small
-                with self._lock:
-                    self.latest_bgr, self.latest_ts = bgr, ts
-                if self.recorder is not None:
-                    self.recorder.write_pv(ts, bgr)
+                with self._vis_lock:
+                    self._pending.append((float(pkt.timestamp), ts, bgr))
+                    self._drain()
 
         # head 운동: IMU 가 없으므로 pose 를 미분한다. 나온 값에는 중력이 없다.
         pos = (pkt.head_pos_x, pkt.head_pos_y, pkt.head_pos_z)
@@ -469,6 +546,126 @@ class HubSource(threading.Thread):
         if self.recorder is not None:
             self.recorder.write_si(f)
 
+    # --- 영상: 레이어 짝짓기와 합성 --------------------------------------
+    def _drain(self):
+        """_vis_lock 을 쥔 채로 부른다. 짝이 붙었거나 기다릴 만큼 기다린 것부터 처리한다.
+
+        왼쪽에서만 꺼낸다. 프레임 2 의 레이어가 프레임 1 보다 먼저 와도 순서를 지켜야
+        optical flow 가 이웃 프레임 쌍을 보게 된다.
+        """
+        while self._pending:
+            ts_f, ts_q, bgr = self._pending[0]
+            layer = self._layers.pop(ts_f, None)
+            if layer is None and self.want_render and len(self._pending) <= RENDER_LAG_FRAMES:
+                break                                  # 아직 레이어를 기다릴 여지가 있다
+            self._pending.popleft()
+            self._last_vis_ts = ts_f
+            # 처리한 시각보다 오래된 레이어는 짝을 잃었다. 두면 계속 쌓인다.
+            for k in [k for k in self._layers if k <= ts_f]:
+                del self._layers[k]
+            self._process_visual(ts_q, bgr, layer)
+
+    def _process_visual(self, ts, bgr, layer):
+        if layer is not None:
+            bgra, png = layer
+            if bgra.shape[:2] != bgr.shape[:2] and not self._size_warned:
+                self._size_warned = True
+                print(f"[HUB] 레이어 격자가 raw 와 다르다: 레이어 {bgra.shape[1]}x{bgra.shape[0]} "
+                      f"vs raw {bgr.shape[1]}x{bgr.shape[0]}. resize 해서 겹치므로 정합이 "
+                      "어긋날 수 있다.", flush=True)
+            frame = self._composite(bgr, bgra)
+            if self.recorder is not None:
+                self.recorder.write_render(ts, png)
+        else:
+            frame = bgr
+        self.render_stats.on_frame(layer is not None)
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        edge, _tex = clutter_value(gray)                # (edge_density, texture_energy)
+        self.metrics.push_clutter(ts, edge)
+        small = to_small(gray)
+        if self._prev_small is not None:
+            res, _ego = flow_residual(self._prev_small, small)
+            self.metrics.push_flow(ts, res)
+        self._prev_small = small
+        with self._lock:
+            self.latest_bgr, self.latest_ts = frame, ts
+        if self.recorder is not None:
+            # 원본을 남긴다. 합성본은 raw 와 레이어로 언제든 다시 만들 수 있다.
+            self.recorder.write_pv(ts, bgr)
+
+    @staticmethod
+    def _composite(bgr, bgra):
+        """레이어를 raw 위에 알파 합성한다.
+
+        cv2.imdecode 는 PNG 내부가 RGBA 여도 BGRA 로 돌려준다. 여기에 RGB2BGR 을 걸면
+        R 과 B 가 뒤집힌다. 채널 변환 없이 그대로 쓰는 것이 맞다.
+        """
+        if bgra.ndim != 3 or bgra.shape[2] != 4:
+            return bgr
+        if bgra.shape[:2] != bgr.shape[:2]:
+            bgra = cv2.resize(bgra, (bgr.shape[1], bgr.shape[0]), cv2.INTER_NEAREST)
+        a = bgra[:, :, 3:4].astype(np.float32) / 255.0
+        fg = bgra[:, :, :3].astype(np.float32)
+        return (fg * a + bgr.astype(np.float32) * (1.0 - a)).astype(np.uint8)
+
+    def _check_alpha_once(self, bgra):
+        """straight 인지 premultiplied 인지 첫 레이어에서 판별해 한 번만 찍는다.
+
+        premultiplied 면 색이 항상 알파 이하라는 점으로 가른다.
+        """
+        a = bgra[:, :, 3]
+        m = (a > 8) & (a < 248)
+        n = int(m.sum())
+        if n < 50:
+            return                                     # 반투명 화소가 없다. 다음 레이어에서 다시
+        self._alpha_checked = True
+        fg = bgra[:, :, :3][m].max(axis=1).astype(np.int32)
+        frac = float((fg > a[m].astype(np.int32) + 2).mean())
+        if frac > 0.02:
+            print(f"[HUB] AR 레이어 알파: straight (반투명 {n}화소, 색>알파 {frac*100:.1f}%). "
+                  "지금 합성식이 맞다.", flush=True)
+        else:
+            print(f"[HUB] AR 레이어 알파: premultiplied 로 보인다 (반투명 {n}화소, "
+                  f"색>알파 {frac*100:.1f}%). 합성식을 fg + bg*(1-a) 로 바꿔야 "
+                  "홀로그램 가장자리에 검은 테가 안 생긴다.", flush=True)
+
+    # --- HL2_RENDER ------------------------------------------------------
+    def _render_loop(self):
+        while self.running:
+            buf = self.render.get_latest(timeout=0.5)
+            if buf is None:
+                continue
+            try:
+                self._on_render(buf)
+            except Exception:
+                print("[HUB] 레이어 처리 오류\n" + traceback.format_exc(), flush=True)
+
+    def _on_render(self, buf):
+        r = sensproto.HL2Render()
+        r.ParseFromString(buf)
+        if not r.image:
+            return
+        self.render_stats.on_arrival(len(r.image))
+        bgra = cv2.imdecode(np.frombuffer(r.image, np.uint8), cv2.IMREAD_UNCHANGED)
+        if bgra is None:
+            return
+        if not self._render_logged:
+            self._render_logged = True
+            ch = bgra.shape[2] if bgra.ndim == 3 else 1
+            print(f"[HUB] AR 레이어 수신 시작: {bgra.shape[1]}x{bgra.shape[0]} "
+                  f"{ch}ch, {len(r.image) / 1024:.1f}KB", flush=True)
+        if not self._alpha_checked:
+            self._check_alpha_once(bgra)
+        # 짝짓기 키는 기기가 그대로 echo 한 float 이다. 양쪽 다 같은 float32 비트라
+        # 그대로 비교하면 정확히 맞는다. 반올림은 경계에서 갈릴 위험만 더한다.
+        ts_f = float(r.timestamp)
+        with self._vis_lock:
+            if self._last_vis_ts is not None and ts_f <= self._last_vis_ts:
+                return                                 # 이미 지나간 프레임. 늦게 왔다
+            self._layers[ts_f] = (bgra, bytes(r.image))
+            self._drain()
+
     # --- HL2_AUDIO -------------------------------------------------------
     def _on_audio(self, buf):
         a = sensproto.HL2Audio()
@@ -508,6 +705,8 @@ class HubSource(threading.Thread):
         self.data.close()
         if self.audio is not None:
             self.audio.close()
+        if self.render is not None:
+            self.render.close()
 
 
 def _quat_axes(q):
@@ -565,6 +764,9 @@ def main() -> None:
                          "(카메라 영상과 정합), display = 사용자 눈 시점. 기본 pv")
     ap.add_argument("--window", type=float, default=2.0, help="지표 집계 창 (초)")
     ap.add_argument("--rate", type=float, default=10.0, help="지표 계산·전송 주기 (Hz)")
+    ap.add_argument("--no-render", action="store_true",
+                    help="AR 레이어를 요청하지 않고 raw PV 로만 visual_clutter/visual_flow 를 "
+                         "잰다. 기본은 레이어를 받아 합성한 '사용자가 본 화면' 기준이다")
     ap.add_argument("--diag", action="store_true",
                     help="5 s 마다 스트림 수신율·오디오 상태·지표별 창 샘플 수와 변동폭을 찍는다. "
                          "값이 갱신되는 것과 제대로 들어오는 것을 구분할 때 쓴다")
@@ -595,9 +797,9 @@ def main() -> None:
 
     if args.source == "hub":
         src = HubSource(args.host, args.port, metrics, recorder,
-                        want_audio=not args.no_audio)
+                        want_audio=not args.no_audio, want_render=not args.no_render)
         src.start()
-        src.send_control(send_audio=not args.no_audio)
+        src.send_control(send_audio=not args.no_audio, send_render=not args.no_render)
         streams = [src]
         pv = si = src
         hub = None                                   # 지표 업로드는 src 가 겸한다
@@ -652,6 +854,10 @@ def _print_diag(metrics, streams, probe, now_qpc, elapsed, span, prev_n) -> None
     print(f"  [diag] {elapsed:.1f}s   {rate}", flush=True)
     if probe is not None:
         print(probe.report(now_qpc, elapsed), flush=True)
+    rs = next((s.render_stats for s in streams
+               if getattr(s, "want_render", False)), None)
+    if rs is not None:
+        print(rs.report(elapsed), flush=True)
     occ = metrics.occupancy(now_qpc)
     print(f"  {'metric':<20}{'n_win':>7}{'min':>11}{'max':>11}", flush=True)
     for k, ok in _OCC_KEY.items():
@@ -733,18 +939,26 @@ def _loop(args, metrics, recorder, streams, pv, si, hub) -> None:
             # 기기는 제어를 일정 시간 못 받으면 스트림을 놓는다. 브로커가 조용히 사라져도
             # 기기가 마이크를 계속 잡고 있지 않도록 주기적으로 다시 보낸다.
             if is_hub and time.time() - last_control >= CONTROL_PERIOD_S:
-                hub.send_control(send_audio=not args.no_audio)
+                hub.send_control(send_audio=not args.no_audio, send_render=not args.no_render)
                 last_control = time.time()
 
             if time.time() - last_log >= 5.0:
                 elapsed = time.time() - last_log
                 alive = ", ".join(f"{s.name}:{s.n}" for s in streams if s.running)
                 drop = f"  hub_dropped={dropped}" if dropped else ""
-                print(f"  ticks={ticks}  {alive}{drop}", flush=True)
+                rs = next((s.render_stats for s in streams
+                           if getattr(s, "want_render", False)), None)
+                rline, warn = rs.status(elapsed) if rs is not None else ("", None)
+                print(f"  ticks={ticks}  {alive}{drop}"
+                      + (f"  {rline}" if rline else ""), flush=True)
+                if warn:
+                    print(f"  ! {warn}", flush=True)
                 if args.diag:
                     _print_diag(metrics, streams, probe, now_qpc, elapsed, span, prev_n)
                     prev_n = {s.name: s.n for s in streams}
                     span = {}
+                if rs is not None:
+                    rs.roll()
                 last_log = time.time()
 
             next_tick += period
@@ -753,7 +967,7 @@ def _loop(args, metrics, recorder, streams, pv, si, hub) -> None:
         print("\n중단", flush=True)
     finally:
         if is_hub:
-            hub.send_control(send_audio=False)       # 기기가 마이크를 즉시 놓게 한다
+            hub.send_control(send_audio=False, send_render=False)   # 기기가 즉시 놓게 한다
             time.sleep(0.2)
         for s in streams:
             s.stop()

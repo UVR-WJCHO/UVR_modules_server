@@ -77,6 +77,8 @@ class SessionRecorder:
 
         self.session = session
         self.n_pv = 0
+        self.n_render = 0
+        self.render_dir = None
         self._t0 = time.time()
 
         self._metrics_f = open(os.path.join(self.dir, "metrics.jsonl"), "a", buffering=1)
@@ -99,6 +101,19 @@ class SessionRecorder:
     def write_pv(self, timestamp: int, bgr: np.ndarray) -> None:
         cv2.imwrite(os.path.join(self.pv_dir, f"{timestamp}.jpg"), bgr)
         self.n_pv += 1
+
+    def write_render(self, timestamp: int, png: bytes) -> None:
+        """AR 레이어를 기기가 보낸 PNG 그대로 둔다.
+
+        디코드·재인코드하면 알파가 보존되는지에 기대야 하고 화질도 한 번 더 깎인다.
+        원본을 두면 나중에 raw 와 합성본을 오프라인에서 다시 비교할 수 있다.
+        """
+        if self.render_dir is None:
+            self.render_dir = os.path.join(self.dir, "render")
+            os.makedirs(self.render_dir, exist_ok=True)
+        with open(os.path.join(self.render_dir, f"{timestamp}.png"), "wb") as f:
+            f.write(png)
+        self.n_render += 1
 
     # --- 실시간 지표 -------------------------------------------------------
     def write_metrics(self, timestamp: int, values: dict) -> None:

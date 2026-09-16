@@ -101,10 +101,8 @@ class StreamingMetrics:
     def occupancy(self, now):
         """각 지표가 창 안의 샘플 몇 개로 계산됐는지.
 
-        값이 나온다고 맞는 것이 아니다. 한두 샘플로 낸 값은 사실상 노이즈고, 0 이면 그
-        지표는 None 이 된다. head_lin_acc 는 10 샘플 미만이면 버린다(current 참조).
-        deque 길이가 아니라 창 안의 개수를 세는 이유는, _trim 이 push 때만 돌아서
-        스트림이 끊기면 지난 샘플이 그대로 남아 있기 때문이다.
+        deque 길이가 아니라 창 안의 개수를 센다. _trim 이 push 때만 돌아서 스트림이
+        끊기면 지난 샘플이 그대로 남기 때문이다.
         """
         lo = now - self.W * C.QPC
         with self._lock:

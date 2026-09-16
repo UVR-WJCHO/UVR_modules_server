@@ -36,6 +36,7 @@ KW_MESH_RESULT = b"MESH_RESULT"      # 서버 -> HL2. 정합된 합본 GLB
 KW_USER_STATE = b"USER_STATE"        # 서버 -> 구독자. 정량화된 사용자 상태 지표 (JSON)
 KW_HL2_CONTROL = b"HL2_CONTROL"      # 서버 -> HL2. 온디맨드 스트림 on/off
 KW_HL2_AUDIO = b"HL2_AUDIO"          # HL2 -> 서버. 마이크 청크
+KW_HL2_RENDER = b"HL2_RENDER"        # HL2 -> 서버. AR 레이어 (홀로그램만, 배경 투명)
 KW_HL2_IMU = b"HL2_IMU"              # HL2 -> 서버. (현재 미사용)
 
 RECV_TIMEOUT_MS = 500                # rx 소켓 타임아웃. 종료 신호를 확인할 주기

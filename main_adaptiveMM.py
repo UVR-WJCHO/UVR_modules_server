@@ -407,8 +407,7 @@ class _RenderStats:
             return (line,
                     "레이어 timestamp 가 어느 PV 프레임과도 맞지 않는다. 기기가 "
                     "HL2SensorPacket.timestamp 를 그대로 echo 하는지 확인하라.")
-        # timestamp 는 맞는데 그 프레임을 이미 내보낸 뒤다. 늦은 것인지 밀리는 것인지는
-        # 레이어가 PV 만큼 오느냐로 갈린다. 모자라면 차이가 계속 벌어져 대기를 늘려도 못 잡는다.
+        # timestamp 는 맞는데 그 프레임을 이미 내보낸 뒤다.
         if pv_rate > 0 and a < pv_rate * 0.9:
             return (line,
                     f"레이어가 PV 보다 적게 온다 ({a / elapsed:.1f}/s vs {pv_rate:.1f}/s). "
@@ -722,11 +721,7 @@ class HubSource(threading.Thread):
             self._drain()
 
     def _note_mismatch(self, ts_f):
-        """_vis_lock 을 쥔 채로 부른다. 짝이 없을 때 원인을 가를 수 있는 값만 남긴다.
-
-        차이가 0 에 가까우면 기기가 echo 대신 연산을 한 것이고, 한 프레임쯤이면 캡처 시각이
-        아니라 렌더 시각을 찍은 것이고, 전혀 다르면 시계 자체가 다르다.
-        """
+        """_vis_lock 을 쥔 채로 부른다. 짝이 없을 때 가장 가까운 PV 와의 차이를 남긴다."""
         if not self._pending:
             self.miss = f"레이어 ts={ts_f:.4f} 도착 시 대기 중인 PV 프레임이 없다."
             return
@@ -931,8 +926,7 @@ def _print_diag(metrics, streams, probe, now_qpc, elapsed, span, prev_n) -> None
         print(probe.report(now_qpc, elapsed), flush=True)
     src = next((s for s in streams if getattr(s, "want_render", False)), None)
     if src is not None:
-        # 소켓이 받은 수와 내 큐가 넘쳐 버린 수. 버린 게 없으면 손실은 내 쪽이 아니라
-        # 전송 쪽이다(디코드나 화면 갱신이 느려서가 아니다).
+        # queue-drop 이 0 이면 손실은 이쪽이 아니라 전송 구간이다.
         c = src.render
         print(src.render_stats.report(elapsed)
               + f"  socket {c.n_arrived} recv / {c.n_dropped} queue-drop", flush=True)

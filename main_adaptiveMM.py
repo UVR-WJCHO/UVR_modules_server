@@ -332,7 +332,9 @@ class PersonalVideo(_Stream):
 #   - IMU 가 없다. head pose 를 미분해 선형가속도와 각속도를 만든다(중력 없음).
 #   - 오디오가 int16 PCM 이다. audio.estimate_audio_density 가 dtype 을 보고 정규화한다.
 # ─────────────────────────────────────────────────────────────────────────────
-RENDER_LAG_FRAMES = 3     # 레이어는 GPU 비동기 읽기 때문에 1~2 프레임 늦게 온다
+# 레이어를 기다리는 시간. 프레임 개수로 세면 안 된다 - PV 가 30 Hz 에서 10 Hz 로
+# 떨어지면 같은 개수가 전혀 다른 시간이 되고, 느릴 때일수록 덜 기다리게 된다.
+RENDER_WAIT_S = 0.6
 
 
 class _RenderStats:
@@ -349,6 +351,20 @@ class _RenderStats:
 
     def _zero(self):
         self.arrived = self.nbytes = self.paired = self.unpaired = 0
+        self.late = self.nomatch = 0
+        self.delays = []
+
+    def on_late(self):
+        with self._lock:
+            self.late += 1
+
+    def on_nomatch(self):
+        with self._lock:
+            self.nomatch += 1
+
+    def on_delay(self, dt):
+        with self._lock:
+            self.delays.append(dt)
 
     def on_arrival(self, nbytes):
         with self._lock:
@@ -364,7 +380,7 @@ class _RenderStats:
             else:
                 self.unpaired += 1
 
-    def status(self, elapsed):
+    def status(self, elapsed, pv_rate=0.0):
         """평상시 로그용. (한 줄 요약, 경고 또는 None).
 
         '안 온다' 와 '와도 짝이 안 맞는다' 는 둘 다 조용히 raw 로 떨어져 증상이 같다.
@@ -372,7 +388,8 @@ class _RenderStats:
         """
         with self._lock:
             a, pr, u = self.arrived, self.paired, self.unpaired
-            ta = self.total_arrived
+            ta, late, nm = self.total_arrived, self.late, self.nomatch
+            d = sorted(self.delays)
         tot = pr + u
         if a == 0:
             return ("render 없음",
@@ -382,11 +399,23 @@ class _RenderStats:
                     "AR 레이어가 끊겼다. 지금은 raw 로 재고 있다.")
         rate = pr / tot * 100 if tot else 0.0
         line = f"render {a / elapsed:.1f}/s paired {rate:.0f}%"
-        if tot and rate < 50:
+        if d:
+            line += f" delay {d[len(d) // 2] * 1e3:.0f}/{d[-1] * 1e3:.0f}ms"   # 중앙값/최대
+        if not tot or rate >= 50:
+            return (line, None)
+        if nm > late:
             return (line,
-                    "레이어는 오는데 짝이 안 맞는다. 기기가 HL2SensorPacket.timestamp 를 "
-                    "그대로 echo 하지 않고 다시 계산하는지 확인하라.")
-        return (line, None)
+                    "레이어 timestamp 가 어느 PV 프레임과도 맞지 않는다. 기기가 "
+                    "HL2SensorPacket.timestamp 를 그대로 echo 하는지 확인하라.")
+        # timestamp 는 맞는데 그 프레임을 이미 내보낸 뒤다. 늦은 것인지 밀리는 것인지는
+        # 레이어가 PV 만큼 오느냐로 갈린다. 모자라면 차이가 계속 벌어져 대기를 늘려도 못 잡는다.
+        if pv_rate > 0 and a < pv_rate * 0.9:
+            return (line,
+                    f"레이어가 PV 보다 적게 온다 ({a / elapsed:.1f}/s vs {pv_rate:.1f}/s). "
+                    "밀린 만큼 계속 벌어지므로 대기를 늘려도 못 따라잡는다. 레이어 크기나 "
+                    "전송 주기를 줄여야 한다.")
+        return (line,
+                f"레이어가 대기 시간({RENDER_WAIT_S}s)보다 늦게 온다. RENDER_WAIT_S 를 늘리면 된다.")
 
     def roll(self):
         """블록 경계. status 와 report 가 같은 구간을 보도록 리셋은 여기서만 한다."""
@@ -418,6 +447,8 @@ class HubSource(threading.Thread):
         self.trail = deque(maxlen=240)
         self.latest: si_adapter.SIFrame | None = None
         self.latest_bgr, self.latest_ts = None, 0
+        # raw 는 도착 즉시, 합성본은 레이어를 기다린 뒤 갱신된다. 합성본이 조금 늦다.
+        self.latest_comp = None
         self._lock = threading.Lock()
         self._prev_small = None
         self._prev_spectrum = None
@@ -436,6 +467,7 @@ class HubSource(threading.Thread):
         self._alpha_checked = False
         self._render_logged = False
         self._size_warned = False
+        self.miss = None                 # 짝이 안 맞을 때 마지막 표본. 경고에 같이 찍는다
 
         # comm_hub 는 source 단위로 구독을 덮어쓰므로 keyword 마다 identity 를 나눈다.
         self.data = HubClient(host, port, recv_kw=KW_HL2DATA,
@@ -503,8 +535,10 @@ class HubSource(threading.Thread):
             arr = np.frombuffer(pkt.image_data, np.uint8)
             bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if bgr is not None:
+                with self._lock:
+                    self.latest_bgr, self.latest_ts = bgr, ts
                 with self._vis_lock:
-                    self._pending.append((float(pkt.timestamp), ts, bgr))
+                    self._pending.append((float(pkt.timestamp), ts, bgr, time.time()))
                     self._drain()
 
         # head 운동: IMU 가 없으므로 pose 를 미분한다. 나온 값에는 중력이 없다.
@@ -554,9 +588,9 @@ class HubSource(threading.Thread):
         optical flow 가 이웃 프레임 쌍을 보게 된다.
         """
         while self._pending:
-            ts_f, ts_q, bgr = self._pending[0]
+            ts_f, ts_q, bgr, enq = self._pending[0]
             layer = self._layers.pop(ts_f, None)
-            if layer is None and self.want_render and len(self._pending) <= RENDER_LAG_FRAMES:
+            if layer is None and self.want_render and time.time() - enq < RENDER_WAIT_S:
                 break                                  # 아직 레이어를 기다릴 여지가 있다
             self._pending.popleft()
             self._last_vis_ts = ts_f
@@ -588,8 +622,9 @@ class HubSource(threading.Thread):
             res, _ego = flow_residual(self._prev_small, small)
             self.metrics.push_flow(ts, res)
         self._prev_small = small
-        with self._lock:
-            self.latest_bgr, self.latest_ts = frame, ts
+        if layer is not None:
+            with self._lock:
+                self.latest_comp = frame
         if self.recorder is not None:
             # 원본을 남긴다. 합성본은 raw 와 레이어로 언제든 다시 만들 수 있다.
             self.recorder.write_pv(ts, bgr)
@@ -610,11 +645,20 @@ class HubSource(threading.Thread):
         return (fg * a + bgr.astype(np.float32) * (1.0 - a)).astype(np.uint8)
 
     def _check_alpha_once(self, bgra):
-        """straight 인지 premultiplied 인지 첫 레이어에서 판별해 한 번만 찍는다.
+        """첫 레이어에서 알파를 확인해 한 번만 찍는다.
 
-        premultiplied 면 색이 항상 알파 이하라는 점으로 가른다.
+        투명 비율이 먼저다. 배경이 투명하지 않으면 합성본이 레이어로 덮여 raw 가 사라진다.
+        straight/premultiplied 는 색이 항상 알파 이하인지로 가른다.
         """
         a = bgra[:, :, 3]
+        tot = a.size
+        clear = float((a == 0).mean())
+        solid = float((a == 255).mean())
+        print(f"[HUB] AR 레이어 알파 분포: 투명 {clear*100:.1f}% / "
+              f"반투명 {(1-clear-solid)*100:.1f}% / 불투명 {solid*100:.1f}%", flush=True)
+        if clear < 0.5:
+            print("       배경이 투명하지 않다. 합성본이 레이어로 덮여 raw 가 보이지 않는다. "
+                  "기기가 배경을 알파 0 으로 비우는지 확인이 필요하다.", flush=True)
         m = (a > 8) & (a < 248)
         n = int(m.sum())
         if n < 50:
@@ -660,11 +704,37 @@ class HubSource(threading.Thread):
         # 짝짓기 키는 기기가 그대로 echo 한 float 이다. 양쪽 다 같은 float32 비트라
         # 그대로 비교하면 정확히 맞는다. 반올림은 경계에서 갈릴 위험만 더한다.
         ts_f = float(r.timestamp)
+        now = time.time()
         with self._vis_lock:
-            if self._last_vis_ts is not None and ts_f <= self._last_vis_ts:
-                return                                 # 이미 지나간 프레임. 늦게 왔다
+            hit = next((x for x in self._pending if x[0] == ts_f), None)
+            if hit is not None:
+                self.render_stats.on_delay(now - hit[3])
+            elif self._last_vis_ts is not None and ts_f <= self._last_vis_ts:
+                # timestamp 는 맞지만 그 프레임을 이미 내보냈다. 대기 시간이 모자란 것이다.
+                self.render_stats.on_late()
+                self.miss = (f"레이어 ts={ts_f:.4f} 가 이미 처리한 "
+                             f"ts={self._last_vis_ts:.4f} 뒤에 왔다. 대기 {RENDER_WAIT_S}s 초과.")
+                return
+            else:
+                self.render_stats.on_nomatch()
+                self._note_mismatch(ts_f)
             self._layers[ts_f] = (bgra, bytes(r.image))
             self._drain()
+
+    def _note_mismatch(self, ts_f):
+        """_vis_lock 을 쥔 채로 부른다. 짝이 없을 때 원인을 가를 수 있는 값만 남긴다.
+
+        차이가 0 에 가까우면 기기가 echo 대신 연산을 한 것이고, 한 프레임쯤이면 캡처 시각이
+        아니라 렌더 시각을 찍은 것이고, 전혀 다르면 시계 자체가 다르다.
+        """
+        if not self._pending:
+            self.miss = f"레이어 ts={ts_f:.4f} 도착 시 대기 중인 PV 프레임이 없다."
+            return
+        near = min(self._pending, key=lambda x: abs(x[0] - ts_f))[0]
+        lo, hi = self._pending[0][0], self._pending[-1][0]
+        self.miss = (f"레이어 ts={ts_f:.4f}, 가장 가까운 PV ts={near:.4f} "
+                     f"(차이 {(ts_f - near) * 1e3:+.1f}ms). 대기열 {len(self._pending)}개 "
+                     f"[{lo:.4f}~{hi:.4f}]")
 
     # --- HL2_AUDIO -------------------------------------------------------
     def _on_audio(self, buf):
@@ -697,6 +767,11 @@ class HubSource(threading.Thread):
     def snapshot(self):
         with self._lock:
             return (None, 0) if self.latest_bgr is None else (self.latest_bgr.copy(), self.latest_ts)
+
+    def snapshot_comp(self):
+        """레이어가 붙은 프레임의 합성본. 없으면 None."""
+        with self._lock:
+            return None if self.latest_comp is None else self.latest_comp.copy()
 
     def stop(self):
         self.running = False
@@ -854,10 +929,13 @@ def _print_diag(metrics, streams, probe, now_qpc, elapsed, span, prev_n) -> None
     print(f"  [diag] {elapsed:.1f}s   {rate}", flush=True)
     if probe is not None:
         print(probe.report(now_qpc, elapsed), flush=True)
-    rs = next((s.render_stats for s in streams
-               if getattr(s, "want_render", False)), None)
-    if rs is not None:
-        print(rs.report(elapsed), flush=True)
+    src = next((s for s in streams if getattr(s, "want_render", False)), None)
+    if src is not None:
+        # 소켓이 받은 수와 내 큐가 넘쳐 버린 수. 버린 게 없으면 손실은 내 쪽이 아니라
+        # 전송 쪽이다(디코드나 화면 갱신이 느려서가 아니다).
+        c = src.render
+        print(src.render_stats.report(elapsed)
+              + f"  socket {c.n_arrived} recv / {c.n_dropped} queue-drop", flush=True)
     occ = metrics.occupancy(now_qpc)
     print(f"  {'metric':<20}{'n_win':>7}{'min':>11}{'max':>11}", flush=True)
     for k, ok in _OCC_KEY.items():
@@ -885,6 +963,7 @@ def _loop(args, metrics, recorder, streams, pv, si, hub) -> None:
     probe = next((s.audio_probe for s in streams if hasattr(s, "audio_probe")), None)
     span: dict[str, tuple[float, float]] = {}        # --diag: 블록 안 지표 최소/최대
     prev_n: dict[str, int] = {}                      # --diag: 수신율 계산용 직전 카운트
+    prev_pv_n = 0                                    # 레이어가 PV 를 따라오는지 비교용
 
     try:
         while True:
@@ -928,6 +1007,9 @@ def _loop(args, metrics, recorder, streams, pv, si, hub) -> None:
                 bgr, _ = pv.snapshot()
                 if bgr is not None:
                     cv2.imshow("PV", draw_gaze(bgr, si.latest))
+                comp = pv.snapshot_comp() if hasattr(pv, "snapshot_comp") else None
+                if comp is not None:
+                    cv2.imshow("Composite", comp)
                 cv2.imshow("Metrics", render_metrics_panel(values))
                 f = si.latest
                 if f is not None and f.has_head:
@@ -948,11 +1030,16 @@ def _loop(args, metrics, recorder, streams, pv, si, hub) -> None:
                 drop = f"  hub_dropped={dropped}" if dropped else ""
                 rs = next((s.render_stats for s in streams
                            if getattr(s, "want_render", False)), None)
-                rline, warn = rs.status(elapsed) if rs is not None else ("", None)
+                pv_rate = (pv.n - prev_pv_n) / elapsed if hasattr(pv, "n") else 0.0
+                prev_pv_n = pv.n if hasattr(pv, "n") else 0
+                rline, warn = rs.status(elapsed, pv_rate) if rs is not None else ("", None)
                 print(f"  ticks={ticks}  {alive}{drop}"
                       + (f"  {rline}" if rline else ""), flush=True)
                 if warn:
                     print(f"  ! {warn}", flush=True)
+                    src = next((s for s in streams if getattr(s, "miss", None)), None)
+                    if src is not None:
+                        print(f"    {src.miss}", flush=True)
                 if args.diag:
                     _print_diag(metrics, streams, probe, now_qpc, elapsed, span, prev_n)
                     prev_n = {s.name: s.n for s in streams}

@@ -48,6 +48,10 @@ hub.close()
 | `KW_SERVER_RESULT` | `SERVER_RESULT` | `main_handtrack.py` 결과 |
 | `KW_HAND_FORECAST` | `HAND_FORECAST` | `main_handtrack_forecast.py` 결과 |
 | `KW_MESH_RESULT` | `MESH_RESULT` | `main_meshrecon.py` 결과 |
+| `KW_WATCH_HR` | `WATCH_HR` | 와치 심박 JSON. `main_devicebridge.py` 가 올린다 |
+| `KW_WATCH_ACTIVITY` | `WATCH_ACTIVITY` | 와치 활동 전이 JSON |
+| `KW_WATCH_AUDIO` | `WATCH_AUDIO` | 와치 20 ms PCM 청크 JSON. `--no-raw-audio` 면 없음 |
+| `KW_WATCH_VAD` | `WATCH_VAD` | 발화 여부. 값이 바뀔 때만 |
 
 ## 환경
 

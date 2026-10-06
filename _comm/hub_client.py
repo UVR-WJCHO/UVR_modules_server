@@ -38,6 +38,10 @@ KW_HL2_CONTROL = b"HL2_CONTROL"      # 서버 -> HL2. 온디맨드 스트림 on/
 KW_HL2_AUDIO = b"HL2_AUDIO"          # HL2 -> 서버. 마이크 청크
 KW_HL2_RENDER = b"HL2_RENDER"        # HL2 -> 서버. AR 레이어 (홀로그램만, 배경 투명)
 KW_HL2_IMU = b"HL2_IMU"              # HL2 -> 서버. (현재 미사용)
+KW_WATCH_HR = b"WATCH_HR"            # 와치 -> 서버. 심박 JSON (main_devicebridge.py 가 올린다)
+KW_WATCH_ACTIVITY = b"WATCH_ACTIVITY"  # 와치 -> 서버. 활동 전이 JSON
+KW_WATCH_AUDIO = b"WATCH_AUDIO"      # 와치 -> 서버. 20 ms PCM 청크 JSON (base64)
+KW_WATCH_VAD = b"WATCH_VAD"          # bridge -> 구독자. 발화 여부, 바뀔 때만
 
 RECV_TIMEOUT_MS = 500                # rx 소켓 타임아웃. 종료 신호를 확인할 주기
 
@@ -47,7 +51,7 @@ class HubClient:
 
     Args:
         host, port:  comm_hub 주소
-        recv_kw:     구독할 keyword
+        recv_kw:     구독할 keyword. None 이면 등록도 수신 스레드도 없다(업로드 전용)
         result_kw:   업로드할 keyword. None 이면 송신 소켓을 열지 않는다(읽기 전용)
         identity:    DEALER identity. 진입점마다 달라야 한다. comm_hub 는 source 단위로
                      구독을 덮어쓰므로, 한 프로세스가 여러 keyword 를 구독하려면 클라이언트
@@ -58,7 +62,7 @@ class HubClient:
     """
 
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
-                 recv_kw: bytes = KW_HL2DATA, result_kw: bytes | None = None,
+                 recv_kw: bytes | None = KW_HL2DATA, result_kw: bytes | None = None,
                  identity: bytes = b"CLIENT", queue_size: int = 1):
         self.ctx = zmq.Context()
         self.identity = identity
@@ -72,7 +76,8 @@ class HubClient:
         # 전달하지 못한 것은 버린다.
         self.rx.setsockopt(zmq.LINGER, 0)
         self.rx.connect(f"tcp://{host}:{port}")
-        self.rx.send_multipart([b"", b"RECV_REG", recv_kw, identity, b"ALL"])
+        if recv_kw is not None:
+            self.rx.send_multipart([b"", b"RECV_REG", recv_kw, identity, b"ALL"])
 
         self.tx = None
         if result_kw is not None:
@@ -86,11 +91,12 @@ class HubClient:
         self.n_dropped = 0      # 루프가 처리 중이라 버린 프레임
         self._fid = 0
         self._stop = False
-        threading.Thread(target=self._rx_loop, daemon=True).start()
+        if recv_kw is not None:
+            threading.Thread(target=self._rx_loop, daemon=True).start()
 
-        sent = result_kw.decode() if result_kw else "-"
         print(f"{identity.decode()} :: connected tcp://{host}:{port}, "
-              f"recv={recv_kw.decode()} result={sent}", flush=True)
+              f"recv={recv_kw.decode() if recv_kw else '-'} "
+              f"result={result_kw.decode() if result_kw else '-'}", flush=True)
 
     def _rx_loop(self) -> None:
         while not self._stop:

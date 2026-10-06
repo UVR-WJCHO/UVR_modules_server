@@ -18,6 +18,7 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 ├── main_handtrack.py          # Hand tracking + gesture recognition
 ├── main_handtrack_forecast.py # Delay-compensated hand tracking (multi-horizon forecast)
 ├── main_all_hl2_receiver.py   # HL2DATA viewer (RGB / depth / overlay)
+├── main_devicebridge.py       # Watch (WebSocket) → comm_hub bridge; phone adapter to follow
 │
 ├── modules/
 │   ├── modules_mesh.py        # MeshReconstructor        (wraps meshrecon/ TRELLIS)
@@ -177,6 +178,20 @@ their registration. Read-only — it produces nothing.
 
 ```bash
 python main_all_hl2_receiver.py            # --no-gui for console only
+```
+
+### 5. Device bridge — Galaxy Watch (`main_devicebridge.py`)
+
+Devices that cannot speak ZeroMQ get an adapter here instead of a change to their app.
+The Wear OS `WatchSensor` app streams heart rate, activity transitions and 16 kHz PCM
+over WebSocket; the bridge accepts it exactly as the original `server.py` did, runs
+`webrtcvad` on the audio, and publishes `WATCH_HR`, `WATCH_ACTIVITY`, `WATCH_AUDIO` and
+`WATCH_VAD` on `comm_hub`. Point the watch app's server IP at this PC; nothing on the
+watch changes. Details in [modules/devicebridge/README.md](modules/devicebridge/README.md).
+
+```bash
+python comm_hub.py --port 37001        # terminal 1
+python main_devicebridge.py            # terminal 2   (--no-raw-audio to publish VAD only)
 ```
 
 ---

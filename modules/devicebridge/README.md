@@ -7,22 +7,23 @@ HL2 앱은 comm_hub 에 직접 붙는다. 와치와 폰은 각자 프로토콜�
 | 어댑터 | 상태 | 받는 방식 | 올리는 keyword |
 |---|---|---|---|
 | `watch.py` | 동작 | WebSocket 서버 (기본 8765) | `WATCH_HR` `WATCH_ACTIVITY` `WATCH_AUDIO` `WATCH_VAD` |
-| 폰 (RoverHandoff) | 예정 | TCP 서버 (8777), 4 B 길이 프레이밍 | `PHONE_TO_HL2` / `HL2_TO_PHONE` |
+| `phone.py` | 동작 | TCP 서버 (기본 8777), 4 B 길이 프레이밍 | `PHONE_TO_HL2` 올리고 `HL2_TO_PHONE` 받음 |
 
 ## 실행
 
 ```bash
 python comm_hub.py
-python main_devicebridge.py                 # --ws-port 8765 기본
+python main_devicebridge.py                 # --ws-port 8765, --tcp-port 8777 기본
 python main_devicebridge.py --no-raw-audio  # WATCH_AUDIO 는 안 올리고 WATCH_VAD 만
 ```
 
-와치 앱 화면에서 서버 IP 를 이 PC 로 바꾼다. 포트는 앱 기본값 8765 그대로다.
+와치·폰 앱 화면에서 서버 IP 를 이 PC 로 바꾼다. 포트는 앱 기본값(8765 / 8777) 그대로다.
 
 5 초마다 한 줄 찍는다. 종류별 수신율과 VAD 상태로 실제로 흐르는지 본다.
 
 ```
   watch  conn=1  hr 1.0/s  act 1  audio 49.0/s  vad=speaking(4 changes)  raw_audio=on
+  phone  conn=192.168.50.20:41022  폰->hl2 2 (last PartUpdate)  hl2->폰 2 (last PartWithdrawn)
 ```
 
 ## 와치 프로토콜 (WatchSensor 앱)
@@ -61,6 +62,30 @@ msg = json.loads(c.get_latest())
 
 comm_hub 는 source 당 수신 등록을 하나만 기억하므로 keyword 마다 identity 를 다르게 한다.
 `WATCH_AUDIO` 처럼 연속인 스트림은 `queue_size` 를 크게 잡아야 청크가 빠지지 않는다.
+
+## 폰 프로토콜 (RoverHandoff)
+
+원래 폰은 HL2 앱 A 에 직접 TCP 로 붙었고 HL2 가 서버였다. 그 HL2 앱은 쓰지 않고 handoff
+기능은 hl2앱 B 가 comm_hub 로 받으므로, bridge 가 HL2 앱 A 가 열던 TCP 서버 역할을 대신한다.
+명세는 `temp/DeviceCommunication/docs/PROTOCOL.md`.
+
+```
+폰  --TCP 8777-->  bridge  --PHONE_TO_HL2-->  hl2앱 B
+폰  <--TCP 8777--  bridge  <--HL2_TO_PHONE--  hl2앱 B
+```
+
+- 프레임: 4 바이트 big-endian 길이(본문만) + UTF-8 JSON. 32 MiB 넘으면 끊는다.
+- 본문: `{"type": "...", "payload": "..."}`. type 은 `PartTransfer` / `PartWithdrawn`
+  (HL2 -> 폰), `PartAccepted` / `PartUpdate` (폰 -> HL2). `PartUpdate` 는 텍스처 PNG 가 들어
+  50~300 KB.
+- bridge 는 본문을 열어보지 않고 바이트 그대로 양쪽에 넘긴다. comm_hub 에 올라가는 payload 가
+  곧 TCP 본문이다.
+- 폰은 한 대다. 새 연결이 오면 이전 연결을 닫는다. 폰이 없을 때 온 `HL2_TO_PHONE` 은 버린다
+  (원래도 큐가 없었다).
+- 핸드셰이크·keep-alive 없음. 폰은 1 초 간격으로 재접속하므로 bridge 가 나중에 떠도 붙는다.
+
+hl2앱 B 쪽은 `ITransport` 를 comm_hub 로 구현한 `HubTransport` 로 받는다
+(`output/hl2_handoff/HL2_HANDOFF_REQUEST_KO.md`).
 
 ## 의존성
 

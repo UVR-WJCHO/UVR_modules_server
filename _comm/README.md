@@ -52,6 +52,8 @@ hub.close()
 | `KW_WATCH_ACTIVITY` | `WATCH_ACTIVITY` | 와치 활동 전이 JSON |
 | `KW_WATCH_AUDIO` | `WATCH_AUDIO` | 와치 20 ms PCM 청크 JSON. `--no-raw-audio` 면 없음 |
 | `KW_WATCH_VAD` | `WATCH_VAD` | 발화 여부. 값이 바뀔 때만 |
+| `KW_PHONE_TO_HL2` | `PHONE_TO_HL2` | 폰 -> HL2. RoverHandoff NetMessage JSON. bridge 가 올린다 |
+| `KW_HL2_TO_PHONE` | `HL2_TO_PHONE` | HL2 -> 폰. 같은 형식. bridge 가 받아 폰에 TCP 로 보낸다 |
 
 ## 환경
 

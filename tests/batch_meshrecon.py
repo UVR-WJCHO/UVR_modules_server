@@ -1,6 +1,6 @@
 """Reconstruct mesh.glb for every output/20260715_* capture (mesh recon only).
 
-Replays exactly what main_meshrecon.py feeds MeshReconstructor for each capture,
+Replays exactly what main_metaobjrecon.py feeds MeshReconstructor for each capture,
 so the produced mesh.glb matches the live pipeline. flag_texpaint is not
 involved here — this is only the TRELLIS gaussian-baked mesh.
 

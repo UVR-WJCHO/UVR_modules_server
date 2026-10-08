@@ -22,7 +22,7 @@ HoloLens2(전송) ↔ 서버(수신) 간 ZeroMQ 통신용 protobuf 정의. 원�
 ## 브로커 클라이언트
 
 진입점은 zmq 를 직접 열지 않고 `hub_client.HubClient` 를 쓴다. 예전에는 같은
-클래스가 `main_handtrack.py`, `main_handtrack_forecast.py`, `main_meshrecon.py` 에
+클래스가 `main_handtrack.py`, `main_handtrack_forecast.py`, `main_metaobjrecon.py` 에
 각각 들어 있었고 이미 서로 달라지고 있었다.
 
 ```python
@@ -47,7 +47,7 @@ hub.close()
 | `KW_HL2DATA` | `HL2DATA` | HL2 -> 서버. 모든 진입점이 구독 |
 | `KW_SERVER_RESULT` | `SERVER_RESULT` | `main_handtrack.py` 결과 |
 | `KW_HAND_FORECAST` | `HAND_FORECAST` | `main_handtrack_forecast.py` 결과 |
-| `KW_MESH_RESULT` | `MESH_RESULT` | `main_meshrecon.py` 결과 |
+| `KW_MESH_RESULT` | `MESH_RESULT` | `main_metaobjrecon.py` 결과 |
 | `KW_WATCH_HR` | `WATCH_HR` | 와치 심박 JSON. `main_devicebridge.py` 가 올린다 |
 | `KW_WATCH_ACTIVITY` | `WATCH_ACTIVITY` | 와치 활동 전이 JSON |
 | `KW_WATCH_AUDIO` | `WATCH_AUDIO` | 와치 20 ms PCM 청크 JSON. `--no-raw-audio` 면 없음 |
@@ -58,7 +58,7 @@ hub.close()
 ## 환경
 
 GPU 알고리즘 진입점(`main_handtrack.py`,
-`main_meshrecon.py`)은 `uvr_integ` 환경에서 실행한다. 브로커,
+`main_metaobjrecon.py`)은 `uvr_integ` 환경에서 실행한다. 브로커,
 뷰어, 녹화/재생처럼 GPU 모델을 불러오지 않는 통신 도구는 가벼운
 전용 환경 `wiseui_commu`를 사용해도 된다.
 

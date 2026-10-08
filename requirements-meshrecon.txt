@@ -1,7 +1,7 @@
-# main_meshrecon_comm.py — capture, reconstruct, align, combine
+# main_metaobjrecon.py — capture, reconstruct, align, combine
 #
 # Traced from the import chain, not guessed:
-#   main_meshrecon_comm -> modules_mesh    -> meshrecon/trellis (TRELLIS)
+#   main_metaobjrecon -> modules_mesh    -> meshrecon/trellis (TRELLIS)
 #                       -> modules_hotrack -> hotrack + segmentor/sam2_realtime
 #                       -> modules_segment -> sam2_realtime, pycocotools
 #                       -> modules_jointtrack -> meshalignment (nvdiffrast)

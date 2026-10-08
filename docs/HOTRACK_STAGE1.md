@@ -1,6 +1,6 @@
 # Interactive HoTrack Stage 1
 
-This branch wires the hograph_plus Hotrack track-only flow into the existing `main_meshrecon.py` and `main_meshrecon_webcam.py` entry points.
+This branch wires the hograph_plus Hotrack track-only flow into the existing `main_metaobjrecon.py` and `main_meshrecon_webcam.py` entry points.
 
 ## What It Does
 
@@ -25,7 +25,7 @@ mkdir -p pretrained/object modules/segmentor/sam2_realtime/checkpoints
 Then run the existing entry point:
 
 ```bash
-python main_meshrecon.py
+python main_metaobjrecon.py
 # or
 python main_meshrecon_webcam.py
 ```
@@ -33,7 +33,7 @@ python main_meshrecon_webcam.py
 The interactive stage-1 path is enabled by default. To use the previous segmentor:
 
 ```bash
-UVR_USE_INTERACTIVE_HOTRACK=0 python main_meshrecon.py
+UVR_USE_INTERACTIVE_HOTRACK=0 python main_metaobjrecon.py
 ```
 
 ## Controls

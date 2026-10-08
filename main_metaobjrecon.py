@@ -1,6 +1,6 @@
-"""main_meshrecon 의 comm_hub 버전 — 캡처 -> 재구성 -> 조립 -> 합본 GLB.
+"""캡처 -> 재구성 -> 조립 -> 물성 추정 -> metaobj(.glb + .json + 티저).
 
-기존 main_meshrecon.py 는 Hl2Manager(hl2ss 직접 스트리밍)로 RGB/depth 를 받았다.
+옛 _legacy/main_meshrecon.py 는 Hl2Manager(hl2ss 직접 스트리밍)로 RGB/depth 를 받았다.
 이 버전은 수신을 comm_hub 로 바꾸고, 캡처를 modules_jointtrack 이 읽는 레이아웃으로
 쌓아서 마지막에 정합·합본까지 한 번에 끝낸다.
 
@@ -8,8 +8,9 @@
          n 은 0 부터 증가한다.
   a      조립 캡처. 이미지·depth 만 저장한다. 직전 두 유닛을 이어 붙인 이름이
          붙는다 — 유닛이 0,1 이면 part_01, 0,1,2 면 part_12.
-  ENTER  정합. 쌓인 캡처로 modules_jointtrack 을 돌려 유닛별 자세를 구하고,
-         그 자세로 파츠를 하나의 GLB 로 합쳐 comm_hub 로 올린다
+  ENTER  정합. 쌓인 캡처로 modules_jointtrack 을 돌려 유닛별 자세를 구하고, 그 자세로
+         파츠를 하나의 GLB 로 합친다. 합본에 behavior(VLM)를 돌려 파츠별 재질·어포던스·
+         물성을 얻고, metaobj/<세션>.glb + .json + 티저 .png 로 남긴 뒤 comm_hub 로 올린다
          (UPLOAD, kw=MESH_RESULT, payload=MeshResult). HTTP 서빙도 UDP 신호도
          쓰지 않는다 — HL2 는 손 결과와 같은 방식으로 구독해서 받아간다.
   q      종료.
@@ -24,12 +25,12 @@
 실행:
     conda activate uvr_integ
     python comm_hub.py --port 37001        # 터미널 1
-    python main_meshrecon.py          # 터미널 2
+    python main_metaobjrecon.py          # 터미널 2
 """
 import os
 import sys
 
-# modules/ 를 top-level 로 import 가능하게 (main_meshrecon.py 와 동일)
+# modules/ 를 top-level 로 import 가능하게 (_legacy/main_meshrecon.py 와 동일)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "modules"))
 # protobuf 정의는 _comm/ 아래
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "_comm"))
@@ -65,6 +66,7 @@ IDENTITY = b"MESHRECON"
 
 flag_recon_mesh = True
 flag_interactive_hotrack = True   # True: InteractiveHoTrackSegmentor, False: legacy HOSegmentor
+flag_behavior = True              # ENTER 때 합본 GLB 에 VLM 을 돌려 물성을 채운다. 끄면 상수 기본값
 
 
 # --- comm_hub 클라이언트 (최신 프레임만 유지) ---
@@ -174,23 +176,6 @@ def run_jointtrack(session_dir: Path, units, assemblies, device="cuda"):
     return inputs
 
 
-def combine(inputs_dir: Path, n_units: int, out_glb: Path, out_metadata: Path):
-    """정합된 파츠를 transforms.json 대로 하나의 GLB 로 합친다.
-
-    metaobj_wrapper/combine_rocket_glb.py 를 그대로 쓴다 — 합본의 노드 계층은
-    HL2 쪽이 기대하는 모양이라 여기서 다시 만들면 안 된다.
-    """
-    sys.path.insert(0, str(Path(__file__).resolve().parent / "metaobj_wrapper"))
-    from combine_rocket_glb import (combine_parts, load_part_specs,
-                                    specs_for_parts, write_metadata_json)
-
-    part_files = [inputs_dir / "glbs" / f"mesh_{i}.glb" for i in range(n_units)]
-    specs = specs_for_parts(load_part_specs(inputs_dir / "transforms.json"))
-    combine_parts(part_files, specs, out_glb)
-    write_metadata_json(out_metadata, specs)
-    return out_glb
-
-
 def build_mesh_result(glb_path: Path, metadata_path: Path, unit_names):
     """합본 GLB 를 MeshResult 로 직렬화. HL2 는 이걸 받아 바로 띄우면 된다."""
     r = proto.MeshResult()
@@ -221,6 +206,7 @@ def main():
     # 무거운 모델 import 는 여기서
     from modules_hotrack import build_interactive_hotrack_segmentor_from_env
     from modules_mesh import MeshReconstructor
+    from modules_metaobj import export_metaobj
     from modules_segment import HOSegmentor
 
     print("\n[Init] segmentor...")
@@ -229,6 +215,11 @@ def main():
     meshrecon = MeshReconstructor() if flag_recon_mesh else None
     if meshrecon is not None:
         print("[Init] MeshReconstructor ready")
+    estimator = None
+    if flag_behavior:
+        from modules_behavior import BehaviorPropertyEstimator
+        estimator = BehaviorPropertyEstimator()
+        print("[Init] BehaviorPropertyEstimator ready")
 
     hub = HubClient(args.host, args.port,
                     result_kw=KW_MESH_RESULT, identity=IDENTITY)
@@ -346,13 +337,16 @@ def main():
                     clear_gpu_memory()
                 try:
                     inputs = run_jointtrack(session_dir, units, assemblies, args.device)
-                    glb = session_dir / "combined.glb"
-                    meta = session_dir / "combined_metadata.json"
-                    combine(inputs, len(units), glb, meta)
+                    part_files = [inputs / "glbs" / f"mesh_{i}.glb" for i in range(len(units))]
+                    # 세션 이름이 파일 이름이자 GLB 루트 노드 이름이다
+                    glb, meta, png = export_metaobj(part_files, inputs / "transforms.json",
+                                                    session_dir / "metaobj", session_dir.name,
+                                                    estimator)
                     payload = build_mesh_result(glb, meta, units)
                     hub.send(payload)
                     print(f"\n[Align] combined {len(units)} units -> {glb} "
-                          f"({glb.stat().st_size / 1024:.0f} KB)")
+                          f"({glb.stat().st_size / 1024:.0f} KB)  json={meta.name}  "
+                          f"teaser={png.name if png else '-'}")
                     print(f"[Send] UPLOAD {KW_MESH_RESULT.decode()} "
                           f"({len(payload) / 1024:.0f} KB) -> comm_hub")
                 except Exception as e:

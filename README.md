@@ -14,7 +14,7 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 ```
 .
 ├── comm_hub.py                # ZeroMQ ROUTER broker — every entry point talks through this
-├── main_meshrecon.py          # Capture → reconstruct → align → one combined GLB
+├── main_metaobjrecon.py       # Capture → reconstruct → align → metaobj (.glb + .json + teaser)
 ├── main_handtrack.py          # Hand tracking + gesture recognition
 ├── main_handtrack_forecast.py # Delay-compensated hand tracking (multi-horizon forecast)
 ├── main_all_hl2_receiver.py   # HL2DATA viewer (RGB / depth / overlay)
@@ -96,7 +96,7 @@ OPENAI_API_KEY=sk-...
 
 ## Entry Points
 
-### 1. Mesh reconstruction — HoloLens2 (`main_meshrecon.py`)
+### 1. Metaobj reconstruction — HoloLens2 (`main_metaobjrecon.py`)
 
 Receives RGB+depth over `comm_hub`, runs interactive hand–object segmentation,
 reconstructs each part on demand, then aligns the parts and returns them as one
@@ -105,25 +105,37 @@ combined GLB.
 ```bash
 conda activate uvr_integ
 python comm_hub.py --port 37001     # terminal 1
-python main_meshrecon.py            # terminal 2
+python main_metaobjrecon.py            # terminal 2
 ```
 
 Flow: HL2 frame → HoTrack segmentation → **`Space`** per unit → **`a`** per assembly
-→ **`Enter`** to align and combine → `UPLOAD kw=MESH_RESULT` back to HL2.
+→ **`Enter`** to align, combine, estimate per-part properties, and export the metaobj
+→ `UPLOAD kw=MESH_RESULT` back to HL2.
 
-The hl2ss-direct predecessor (`main_meshrecon.py`) is retired under `_legacy/`.
+The hl2ss-direct predecessor is retired as `_legacy/main_meshrecon.py`.
 
-Each capture is written to its own timestamped folder:
+Everything for one run lands in a timestamped session folder:
 
 ```
 output/<YYYYMMDD_HHMMSS>/
-├── rgb.png
-├── rgb_masked.png
-├── depth.npy
-├── intrinsic.npy
-├── mesh.glb            # TRELLIS reconstruction
-└── property.json       # only if flag_behavior = True
+├── part_0/ part_1/ …   # unit captures: rgb.png, rgb_masked.png, depth.npy, intrinsic.npy, mesh.glb
+├── part_01/ part_12/ … # assembly captures (no mesh)
+├── stage1/ C01/ …      # alignment work
+├── inputs/             # transforms.json + staged glbs fed to the combiner
+└── metaobj/            # the deliverable — see modules/modules_metaobj.py
+    ├── <session>.glb   # combined object; root node named after the session
+    ├── <session>.json  # per-part material / affordance / 9 rangeProperties (HL2 reads this)
+    ├── <session>.png   # teaser: textured render of the combined object
+    ├── vlm_result.json # raw VLM output, kept for reference
+    └── vlm/            # VLM input renders
 ```
+
+Per-part properties come from `modules/behavior` (GPT-4o-mini over per-part X-ray renders,
+needs `OPENAI_API_KEY` in the repo-root `.env`). Three of the nine properties
+(electrical conductivity, thermal expansion, fracture toughness) are not produced by that
+module yet and are filled from a per-material placeholder table in `modules_metaobj.py`;
+the run log says so. If the VLM step fails the JSON still goes out with the combiner's
+constant defaults and the failure is printed loudly.
 
 Toggles (top of the file):
 
@@ -131,7 +143,7 @@ Toggles (top of the file):
 |---|---|---|
 | `flag_recon_mesh` | `True` | run TRELLIS mesh reconstruction |
 | `flag_interactive_hotrack` | `True` | `True` = HoTrack (color); `False` = legacy depth-based `HOSegmentor` |
-| `flag_behavior` | `False` | run behavior property estimation after each mesh |
+| `flag_behavior` | `True` | run the VLM property estimation on the combined GLB at `Enter`; `False` = constant defaults, no teaser |
 
 The combined GLB goes back through `comm_hub` as a `MeshResult` — no HTTP server,
 no UDP signal. See `_comm/README.md` for the transport.

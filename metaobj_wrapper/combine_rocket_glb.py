@@ -84,15 +84,9 @@ PART_METADATA_ADDITIONAL_PROPERTIES: dict[str, Any] = {
     "fracture_toughness_MPa_sqrt_m": [15.0, 45.0]
 }
 
-# Per-part hardcoded values override the shared defaults. Add any key here when
-# one part needs a different value from the rest.
-PART_METADATA_OVERRIDES: dict[int, dict[str, Any]] = {
-    0: {"colorHex": "#00FFFF"},
-    1: {"colorHex": "#FF0000"},
-    2: {"colorHex": "#12FF00"},
-    3: {"colorHex": "#FFD100"},
-    4: {"colorHex": "#FFFFFF"},
-}
+# Per-part hardcoded values override the shared defaults. Empty on purpose: a part's
+# colour is not something an index can know, so every part keeps the base colorHex.
+PART_METADATA_OVERRIDES: dict[int, dict[str, Any]] = {}
 
 
 def _as_vec3(value: Any, field_name: str, default: tuple[float, float, float]) -> np.ndarray:
@@ -632,7 +626,8 @@ def add_test_like_mesh_attributes(path: Path) -> None:
     _write_glb_chunks(path, json_doc, chunks)
 
 
-def combine_parts(part_files: list[Path], part_specs: list[dict[str, Any]], output_file: Path) -> None:
+def combine_parts(part_files: list[Path], part_specs: list[dict[str, Any]], output_file: Path,
+                  root_name: str = ROOT_NODE_NAME) -> None:
     if len(part_files) != len(part_specs):
         raise ValueError(f"{len(part_files)} GLB files but {len(part_specs)} transforms")
 
@@ -655,7 +650,7 @@ def combine_parts(part_files: list[Path], part_specs: list[dict[str, Any]], outp
     output_file.parent.mkdir(parents=True, exist_ok=True)
     combined.export(output_file)
     object_names = [f"{OBJECT_NAME_PREFIX}{index}" for index in range(len(part_files))]
-    rewrite_glb_hierarchy_like_test(output_file, ROOT_NODE_NAME, object_names)
+    rewrite_glb_hierarchy_like_test(output_file, root_name, object_names)
     add_test_like_mesh_attributes(output_file)
     print(f"wrote {output_file}")
 

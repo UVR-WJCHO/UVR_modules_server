@@ -1,7 +1,7 @@
 """comm_hub 에 붙는 DEALER 클라이언트. 모든 진입점이 이 하나를 쓴다.
 
 이 파일이 생기기 전에는 `main_handtrack.py`, `main_handtrack_forecast.py`,
-`main_meshrecon.py` 가 같은 클래스를 각자 65~70줄씩 들고 있었고, 뷰어는 zmq 를
+`main_metaobjrecon.py` 가 같은 클래스를 각자 65~70줄씩 들고 있었고, 뷰어는 zmq 를
 직접 열었다. 규약이 하나인데 구현이 넷이라 이미 서로 달라지기 시작했으므로
 (프레임 언패킹 방식, 스레드 시작 방식, 결과 전송 메서드 이름) 여기로 모은다.
 

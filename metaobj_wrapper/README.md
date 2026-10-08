@@ -4,7 +4,7 @@
 
 ## Conda 환경
 
-메인 서버에서 `main_meshrecon.py`가 이 래퍼를 직접 import하므로,
+메인 서버에서 `main_metaobjrecon.py`가 이 래퍼를 직접 import하므로,
 프로젝트의 GPU 실행 환경과 같은 `uvr_integ`를 사용합니다.
 
 ```bash
@@ -171,14 +171,12 @@ part별로 다른 값을 넣으려면 `inputs/transforms.json`의 각 part 항�
 }
 ```
 
-`PART_METADATA_OVERRIDES`는 여전히 정적인 part index별 기본값을 설정할 때 사용합니다.
+`PART_METADATA_OVERRIDES`는 비워 두었습니다. 파츠 색을 index로 정할 근거가 없어서 모든
+파츠가 기본 `colorHex`(흰색)를 갖습니다. 실제 값은 `metadata`로 덮어씁니다 — 서버의
+`modules/modules_metaobj.py`가 behavior(VLM) 결과를 그 경로로 넣습니다.
 
-```python
-PART_METADATA_OVERRIDES = {
-    0: {"colorHex": "#00FFFF"},
-    1: {"colorHex": "#FF0000", "material": "steel"},
-}
-```
+`combine_parts(..., root_name=)`로 GLB 루트 노드 이름을 줄 수 있습니다. CLI 기본값은
+`rocket`이고 서버는 세션 이름을 씁니다.
 
 ## 경로를 직접 지정하는 실행
 

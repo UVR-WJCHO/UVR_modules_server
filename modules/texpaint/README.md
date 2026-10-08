@@ -2,7 +2,7 @@
 
 Improves texture quality by re-texturing TRELLIS geometry with **Hunyuan3D-Paint (2.1)**
 using a single reference image. Completely separate from the main pipeline — no existing
-file under `modules/` or `main_meshrecon.py` is modified.
+file under `modules/` or `main_metaobjrecon.py` is modified.
 
 ## Data flow
 
@@ -64,15 +64,15 @@ gltf-viewer.donmccurdy.com) — simple viewers show albedo only.
 
 ## Main pipeline integration (flag-gated)
 
-`main_meshrecon.py` keeps its original behaviour by default. The new pipeline is opt-in via
+`main_metaobjrecon.py` keeps its original behaviour by default. The new pipeline is opt-in via
 env var — no code edits needed to switch:
 
 ```bash
 # old behaviour (TRELLIS gaussian-baked texture):
-python main_meshrecon.py
+python main_metaobjrecon.py
 
 # new behaviour (TRELLIS geometry + Hunyuan3D-Paint PBR):
-UVR_USE_TEXPAINT=1 python main_meshrecon.py      # also needs flag_recon_mesh=True
+UVR_USE_TEXPAINT=1 python main_metaobjrecon.py      # also needs flag_recon_mesh=True
 ```
 
 When `UVR_USE_TEXPAINT=1`, after TRELLIS exports `mesh.glb` the main process offloads TRELLIS

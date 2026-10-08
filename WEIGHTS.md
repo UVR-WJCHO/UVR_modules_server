@@ -8,7 +8,7 @@
 
 ## 1. Mesh Reconstruction (TRELLIS) — `pretrained/meshrecon/`
 
-소비: [modules/modules_mesh.py](modules/modules_mesh.py) `MeshReconstructor` → 진입점 `main_meshrecon.py`
+소비: [modules/modules_mesh.py](modules/modules_mesh.py) `MeshReconstructor` → 진입점 `main_metaobjrecon.py`
 로딩: `TrellisImageTo3DPipeline.from_pretrained("pretrained/meshrecon/diffusion")` → `diffusion/pipeline.json`이 아래 파일들을 참조
 
 ### 1-1. 커스텀 학습 가중치 — `pretrained/meshrecon/diffusion/ckpts_new/`

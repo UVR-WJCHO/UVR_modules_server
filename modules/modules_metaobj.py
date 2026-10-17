@@ -57,6 +57,66 @@ MISSING_PROPERTY_PRIORS = {
 }
 _GENERIC_MISSING = ((1.0, 30.0), (10.0, 25.0), (20.0, 100.0))
 
+# VLM 이 금속 사전에 없는 재질(유리·고무·플라스틱 등)을 내면 behavior 는 물성 범위를 비워
+# 보낸다. 그 파츠만 여기서 채운다. 9 개 전부, PROPERTY_LABELS 순서. 임시값이다.
+NONMETAL_PRIORS = {
+    #            E GPa          g/cm3        poisson       tensile MPa   HV            k W/mK       elec MS/m  exp 1e-6/K   K_IC
+    "wood":     [(9, 13),       (0.6, 0.9),  (0.3, 0.4),   (50, 120),    (1, 5),       (0.1, 0.2),  (0, 0),    (5, 40),     (0.2, 0.6)],
+    "plastic":  [(1.8, 2.5),    (1.02, 1.2), (0.35, 0.4),  (30, 55),     (5, 15),      (0.15, 0.3), (0, 0),    (60, 100),   (2, 4)],
+    "rubber":   [(0.001, 0.01), (0.9, 1.2),  (0.48, 0.5),  (10, 25),     (0.01, 0.1),  (0.1, 0.2),  (0, 0),    (150, 250),  (0.1, 0.5)],
+    "glass":    [(65, 75),      (2.4, 2.6),  (0.2, 0.25),  (30, 90),     (450, 600),   (0.8, 1.2),  (0, 0),    (8, 9),      (0.7, 0.9)],
+    "leather":  [(0.1, 0.5),    (0.8, 1.0),  (0.3, 0.45),  (10, 30),     (0.01, 0.1),  (0.1, 0.2),  (0, 0),    (50, 150),   (0.5, 2)],
+    "fabric":   [(0.05, 0.5),   (0.3, 1.0),  (0.2, 0.4),   (5, 50),      (0.01, 0.1),  (0.03, 0.1), (0, 0),    (50, 200),   (0.1, 1)],
+    "ceramic":  [(300, 400),    (3.8, 4.0),  (0.2, 0.25),  (200, 350),   (1500, 2000), (20, 35),    (0, 0),    (7, 9),      (3, 5)],
+    "paper":    [(2, 4),        (0.7, 0.9),  (0.2, 0.35),  (20, 60),     (0.01, 0.1),  (0.05, 0.1), (0, 0),    (5, 30),     (0.1, 0.5)],
+    "stone":    [(50, 70),      (2.6, 2.8),  (0.2, 0.3),   (5, 20),      (100, 200),   (2, 3),      (0, 0),    (5, 10),     (0.5, 1.5)],
+}
+_GENERIC_ALL = [(1, 100), (0.5, 8), (0.2, 0.45), (10, 500), (1, 500), (0.1, 50), (0, 30), (5, 100), (0.5, 50)]
+_ALIASES = {"aluminum": "aluminium", "steel": "carbon_steel", "iron": "cast_iron",
+            "polymer": "plastic", "abs": "plastic", "pla": "plastic", "nylon": "plastic",
+            "polyurethane": "plastic", "foam": "plastic",
+            "cloth": "fabric", "textile": "fabric", "upholstery_fabric": "fabric", "velvet": "fabric",
+            "timber": "wood", "plywood": "wood", "cardboard": "paper",
+            "marble": "stone", "granite": "stone", "concrete": "stone"}
+
+
+def _metal_priors() -> dict:
+    """behavior 의 금속 사전. sys.path 를 건드리지 않으려고 파일 경로로 읽는다."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_behavior_config", _REPO / "modules" / "behavior" / "utils" / "config.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.MATERIAL_PROPERTY_PRIORS
+
+
+def ranges_for(material: str, vlm_part: dict | None = None) -> tuple[str, list[dict]]:
+    """재질 이름 -> (정규화한 이름, PROPERTY_LABELS 순서의 9 개 범위).
+
+    VLM 이 범위를 준 금속이면 그 6 개 + 임시 3 개. VLM 이 'steel' 처럼 사전 밖 이름을 내면
+    별칭으로 사전 금속에 맞춰 사전 범위를 쓴다. 비금속은 NONMETAL_PRIORS, 그것도 없으면
+    아주 넓은 공통 범위다. 어느 경우든 9 개가 나간다.
+    """
+    name = (material or "").strip().lower().replace(" ", "_")
+    name = _ALIASES.get(name, name)
+    vals: list[tuple[float, float]] = []
+    if vlm_part is not None:
+        for label in PROPERTY_LABELS[:_N_FROM_VLM]:
+            v = vlm_part.get(_VLM_KEY.get(label, label))
+            if isinstance(v, (list, tuple)) and len(v) == 2:
+                vals.append((float(v[0]), float(v[1])))
+    metals = _metal_priors()
+    if len(vals) != _N_FROM_VLM and name in metals:
+        m = metals[name]
+        vals = [tuple(map(float, m[_VLM_KEY.get(l, l)])) for l in PROPERTY_LABELS[:_N_FROM_VLM]]
+    if len(vals) == _N_FROM_VLM:
+        vals += list(MISSING_PROPERTY_PRIORS.get(name, _GENERIC_MISSING))
+    elif name in NONMETAL_PRIORS:
+        vals = NONMETAL_PRIORS[name]
+    else:
+        vals = _GENERIC_ALL
+    return name, [{"label": l, "min": float(lo), "max": float(hi)} for l, (lo, hi) in zip(PROPERTY_LABELS, vals)]
+
 
 def part_nodes_in_vlm_order(glb_path) -> list[str]:
     """behavior 가 partId 를 매기는 순서 그대로 노드 이름을 돌려준다. partId k -> [k-1].
@@ -75,16 +135,12 @@ def part_nodes_in_vlm_order(glb_path) -> list[str]:
 
 
 def _to_metadata(part: dict) -> dict:
-    material = part.get("material", "")
-    ranges = []
-    for label in PROPERTY_LABELS[:_N_FROM_VLM]:
-        v = part.get(_VLM_KEY.get(label, label))
-        if not (isinstance(v, (list, tuple)) and len(v) == 2):
-            raise RuntimeError(f"VLM 결과 partId={part.get('partId')} 에 {label} 범위가 없다: {v!r}")
-        ranges.append({"label": label, "min": float(v[0]), "max": float(v[1])})
-    for label, (lo, hi) in zip(PROPERTY_LABELS[_N_FROM_VLM:],
-                               MISSING_PROPERTY_PRIORS.get(material, _GENERIC_MISSING)):
-        ranges.append({"label": label, "min": lo, "max": hi})
+    material, ranges = ranges_for(part.get("material", ""), part)
+    if not any(isinstance(part.get(_VLM_KEY.get(l, l)), (list, tuple)) for l in PROPERTY_LABELS[:_N_FROM_VLM]):
+        src = ("금속 사전(별칭)" if material in _metal_priors() else
+               "NONMETAL_PRIORS" if material in NONMETAL_PRIORS else "공통 범위")
+        print(f"[metaobj] partId={part.get('partId')} VLM 재질 {part.get('material')!r} -> {material!r}, "
+              f"범위는 {src}", flush=True)
     return {"material": material, "affordance": part.get("affordance", ""), "rangeProperties": ranges}
 
 

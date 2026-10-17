@@ -201,3 +201,23 @@ conda run -n rocket_glb python -c "import trimesh; s=trimesh.load('outputs/rocke
 정상이라면 geometry 개수는 `5`입니다.
 
 Blender에서 확인할 때는 기존에 import된 오브젝트를 삭제한 뒤 `outputs/rocket.glb`를 새로 import하세요.
+
+## 예시 metaobj 만들기 (`make_examples.py`)
+
+HL2 테스트용으로 다양한 객체의 metaobj 가 필요할 때 공개 모델(Khronos glTF-Sample-Assets)로
+만든다. 서버와 같은 `modules/modules_metaobj.export_metaobj` 를 거치므로 산출물 형식이 같다.
+
+```bash
+python metaobj_wrapper/make_examples.py build ToyCar Lantern   # 다운로드 -> 파츠 분해 -> 합본 -> VLM -> 티저
+python metaobj_wrapper/make_examples.py apply ToyCar Lantern   # OVERRIDES 의 재질로 JSON 덮어쓰기
+python metaobj_wrapper/make_examples.py all   ToyCar Lantern
+```
+
+객체 폴더 `output/metaobj_examples/<이름>/` 에는 `<이름>.glb`, `.json`, `.png` 세 파일만 둔다.
+출처·라이선스·파츠 매핑(`control_parts<i>` <-> 원본 노드)·덮어쓴 재질 기록은
+`output/metaobj_examples/SOURCES.md` 한 파일에 모은다. 다운로드·파츠·VLM 렌더 같은 중간물은
+`output/metaobj_examples/_work/<이름>/` 에 있고 지워도 된다(지우면 다음 `build` 가 VLM 을 다시 부른다).
+
+behavior 모듈이 금속 9 종만 알아서 비금속은 사람이 `OVERRIDES` 에 적는다. `build` 가 만든
+`_work/<이름>/parts.json` 과 `vlm_result.json`, 그리고 `SOURCES.md` 의 표를 보고 적는다. 비금속 물성은 `modules_metaobj.NONMETAL_PRIORS`
+의 임시값이다. 두 번째 `build` 부터는 `vlm_result.json` 이 있으면 VLM 을 다시 부르지 않는다.

@@ -44,6 +44,7 @@ KW_WATCH_AUDIO = b"WATCH_AUDIO"      # 와치 -> 서버. 20 ms PCM 청크 JSON (
 KW_WATCH_VAD = b"WATCH_VAD"          # bridge -> 구독자. 발화 여부, 바뀔 때만
 KW_PHONE_TO_HL2 = b"PHONE_TO_HL2"    # 폰 -> HL2. RoverHandoff NetMessage JSON (bridge 가 올린다)
 KW_HL2_TO_PHONE = b"HL2_TO_PHONE"    # HL2 -> 폰. 같은 형식. bridge 가 받아 폰에 TCP 로 보낸다
+KW_HL2_SCENE = b"HL2_SCENE"          # HL2 -> 서버. 기기 월드 기준 공유 콘텐츠 자세 JSON (HL2_SCENE_PROTOCOL.md)
 
 RECV_TIMEOUT_MS = 500                # rx 소켓 타임아웃. 종료 신호를 확인할 주기
 

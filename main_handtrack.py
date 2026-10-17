@@ -45,10 +45,10 @@ from hub_client import (                       # noqa: E402
 
 
 # --- CONFIGURATION ---
-GESTURE_CKPT_FILE = "gesture_checkpoint-40.tar"
+GESTURE_CKPT_FILE = "gesture/checkpoint-40.tar"
 FLAG_INTERACTION_DETECT = False  # object-aware gesture detection
-FLAG_VISUALIZE_DEPTH = True     # True 면 Depth 창을 띄운다 (선택적 시각화)
-FLAG_GESTURE = False              # True 면 gesture 인식 수행 (False 면 hand tracking 만)
+FLAG_VISUALIZE_DEPTH = False     # True 면 Depth 창을 띄운다 (선택적 시각화)
+FLAG_GESTURE = True              # True 면 gesture 인식 수행 (False 면 hand tracking 만)
 
 # comm_hub 접속. 주소와 keyword 는 _comm/hub_client.py 가 갖는다
 IDENTITY = b"HANDTRACK"

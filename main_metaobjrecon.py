@@ -23,7 +23,7 @@
 이어진다. 사슬이 끊기면 정합 단계에서 걸린다.
 
 실행:
-    conda activate uvr_integ
+    conda activate metaboj_hotrack
     python comm_hub.py --port 37001        # 터미널 1
     python main_metaobjrecon.py          # 터미널 2
 """
@@ -191,10 +191,7 @@ def main():
     ap.add_argument("--session", default=None,
                     help="캡처를 쌓을 디렉토리 (기본: output/<timestamp>)")
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--track-only", action="store_true",
-                    help="손으로 잡은 객체 추적/캡처만 실행 (TRELLIS·정합·물성 추정 제외)")
     args = ap.parse_args()
-    recon_enabled = flag_recon_mesh and not args.track_only
 
     session_dir = Path(args.session or
                        Path("output") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
@@ -212,13 +209,13 @@ def main():
         from modules_segment import HOSegmentor
         hosegmentor = HOSegmentor()
     meshrecon = None
-    if recon_enabled:
+    if flag_recon_mesh:
         from modules_mesh import MeshReconstructor
         meshrecon = MeshReconstructor()
     if meshrecon is not None:
         print("[Init] MeshReconstructor ready")
     estimator = None
-    if flag_behavior and not args.track_only:
+    if flag_behavior:
         from modules_behavior import BehaviorPropertyEstimator
         estimator = BehaviorPropertyEstimator()
         print("[Init] BehaviorPropertyEstimator ready")
@@ -243,12 +240,10 @@ def main():
 
             color = decode_rgb(pkt.image_data)
             depth_m = decode_depth_m(pkt.depth_data)
-            if color is None:
-                continue
-            if depth_m is None and (not args.track_only or not flag_interactive_hotrack):
+            if color is None or depth_m is None:
                 continue
             H, W = color.shape[:2]
-            if depth_m is not None and depth_m.shape[:2] != (H, W):
+            if depth_m.shape[:2] != (H, W):
                 depth_m = cv2.resize(depth_m, (W, H), interpolation=cv2.INTER_NEAREST)
             K = intrinsic_matrix(pkt, W, H)
 
@@ -284,9 +279,6 @@ def main():
             if obj_mask is None:
                 if key in (" ", "a", "\r", "\n"):
                     print("[Capture] 선택한 객체의 유효한 마스크가 없습니다")
-                continue
-            if key in (" ", "a") and depth_m is None:
-                print("[Capture] RGB 추적은 가능하지만 캡처 저장에는 depth가 필요합니다")
                 continue
 
             # ---------- 유닛 캡처 ----------
@@ -332,9 +324,6 @@ def main():
 
             # ---------- 정합 + 합본 ----------
             elif key in ("\r", "\n"):
-                if args.track_only:
-                    print("[Align] --track-only에서는 재구성·정합을 실행하지 않습니다")
-                    continue
                 if not assemblies:
                     print("[Align] no assembly capture yet")
                     continue

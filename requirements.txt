@@ -1,6 +1,4 @@
 # requirements.txt — legacy/bootstrap snapshot for the server stack
-# main_metaobjrecon.py now uses environment-metaboj_hotrack.yml and
-# scripts/setup_metaboj_hotrack.py for its full tracking/reconstruction runtime.
 #
 # The active, validated runtime is the `uvr_integ` conda environment. This file
 # preserves an older Python 3.10 / CUDA 12.1 / torch 2.4.0+cu121 dependency set;

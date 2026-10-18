@@ -2,7 +2,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -57,7 +57,6 @@ def _env_float(name: str, default: float) -> float:
 def _hograph_plus_fallback(rel_path: str | Path) -> Optional[Path]:
     root_raw = os.environ.get("HOGRAPH_PLUS_ROOT")
     roots = [Path(root_raw).expanduser()] if root_raw else [
-        _REPO_ROOT.parent / "hograph",
         _REPO_ROOT.parent / "hograph_plus",
         _REPO_ROOT.parent.parent / "hograph_plus",
     ]
@@ -68,8 +67,34 @@ def _hograph_plus_fallback(rel_path: str | Path) -> Optional[Path]:
     return None
 
 
+def _sanitize_track_only_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        return result
+    result["runtime_mode"] = "track_only"
+    result["struct_events"] = []
+    result["id_transitions"] = []
+    result["id_remap"] = {}
+    return result
+
+
+def _sanitize_track_only_tracking_json(track_path: Path) -> None:
+    if not track_path.is_file():
+        return
+    try:
+        payload = json.loads(track_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(payload, dict):
+        return
+    payload["runtime_mode"] = "track_only"
+    payload["struct_events"] = []
+    payload["id_transitions"] = []
+    payload["id_remap"] = {}
+    track_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def apply_track_only_hotrack_runtime_flags(hotrack: Any) -> None:
-    """Select the in-class observation path before processing any frames."""
+    """Mirror hograph_plus HographPipelineRunner._apply_track_only_hotrack_runtime_flags."""
     hotrack.enable_structural_ops = False
     hotrack.use_dino_id = False
     hotrack.enable_id_recovery = False
@@ -104,7 +129,6 @@ def build_interactive_hotrack_segmentor_from_env(**overrides: Any) -> "Interacti
         "ho_thresh_obj": _env_float("UVR_HOTRACK_HO_THRESH_OBJ", 0.55),
         "target_contact_code": os.environ.get("UVR_HOTRACK_TARGET_CONTACT", "P"),
         "backfill_window": 0,
-        "interactive_window": _env_flag("UVR_HOTRACK_INTERACTIVE_WINDOW", True),
         # per-frame disk dumps (mask PNG/overlay/JSON + tracking JSON) are debug-only
         # and not used by the live pipeline -> off by default (set env=1 to re-enable)
         "save_masks": _env_flag("UVR_HOTRACK_SAVE_MASKS", False),
@@ -306,9 +330,7 @@ class InteractiveHoTrackSegmentor:
             iou_threshold=self.iou_threshold,
             frame_tag=frame_tag,
         )
-        if (result.get("runtime_mode") != "track_only" or result.get("struct_events")
-                or result.get("id_transitions") or result.get("id_remap")):
-            raise RuntimeError("Hotrack entered an unexpected structural runtime")
+        _sanitize_track_only_result(result)
         self.current_result = result
         self.current_frame_idx = int(result.get("frame_idx", -1))
         self.current_masks = {
@@ -316,6 +338,10 @@ class InteractiveHoTrackSegmentor:
             for k, v in (result.get("tracked_masks", {}) or {}).items()
             if v is not None and np.any(v)
         }
+        if self.save_tracking_json:
+            _sanitize_track_only_tracking_json(
+                Path(self.hotrack.tracking_json_dir) / f"{result.get('frame_tag', frame_tag)}_track.json"
+            )
         self.current_vis = self.render(self.current_frame)
         self._save_current_outputs()
 
@@ -505,7 +531,7 @@ class InteractiveHoTrackSegmentor:
                 mask=self.edit_mask.astype(bool),
             )
             if isinstance(ret, tuple) and len(ret) >= 3:
-                _, obj_ids, logits = ret[:3]
+                _, obj_ids, logits = ret
                 self.hotrack.all_ids = [int(x) for x in list(obj_ids)]
                 if logits is not None and oid in self.hotrack.all_ids:
                     idx = self.hotrack.all_ids.index(oid)

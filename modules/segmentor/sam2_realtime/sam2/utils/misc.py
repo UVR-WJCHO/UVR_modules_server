@@ -59,41 +59,9 @@ def get_connected_components(mask):
     - counts: A tensor of shape (N, 1, H, W) containing the area of the connected
               components for foreground pixels and 0 for background pixels.
     """
-    if mask.is_cuda:
-        try:
-            from sam2 import _C
-        except ImportError:
-            pass
-        else:
-            return _C.get_connected_componnets(mask.to(torch.uint8).contiguous())
-    if mask.ndim != 4 or mask.shape[1] != 1:
-        raise ValueError("mask must have shape [N, 1, H, W]")
+    from sam2 import _C
 
-    # The upstream optional CUDA extension labels components by their root
-    # pixel index. HoGraph only consumes foreground/background and per-pixel
-    # component area, so OpenCV's sequential labels are exactly equivalent for
-    # the released post-processing decisions and need no local compilation.
-    device = mask.device
-    binary = mask.detach().to(dtype=torch.uint8, device="cpu").numpy()
-    labels = np.zeros(binary.shape, dtype=np.int32)
-    areas = np.zeros(binary.shape, dtype=np.int32)
-    for index in range(binary.shape[0]):
-        count, component_labels = cv2.connectedComponents(
-            binary[index, 0],
-            connectivity=8,
-        )
-        component_areas = np.bincount(
-            component_labels.reshape(-1),
-            minlength=int(count),
-        ).astype(np.int32, copy=False)
-        pixel_areas = component_areas[component_labels]
-        pixel_areas[component_labels == 0] = 0
-        labels[index, 0] = component_labels
-        areas[index, 0] = pixel_areas
-    return (
-        torch.from_numpy(labels).to(device=device),
-        torch.from_numpy(areas).to(device=device),
-    )
+    return _C.get_connected_componnets(mask.to(torch.uint8).contiguous())
 
 
 def mask_to_box(masks: torch.Tensor):

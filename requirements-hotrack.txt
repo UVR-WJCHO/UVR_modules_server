@@ -1,3 +1,0 @@
-# Compatibility name: use the full shared server requirements.
-# Complete native/CUDA installation: python scripts/setup_metaboj_hotrack.py
--r requirements-metaboj_hotrack.txt

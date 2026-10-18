@@ -61,7 +61,7 @@ for p in [SAM2_IMPORT_ROOT, SAM2_ROOT, PROJECT_ROOT]:
 from hotrack.detector import build_detector, detect_image_bgr
 
 # SAM2 모듈 import
-from sam2.build_sam import build_sam2_realtime_predictor, build_sam2_video_predictor
+from sam2_realtime.sam2.build_sam import build_sam2_realtime_predictor, build_sam2_video_predictor
 
 # Utils 모듈 import
 from hotrack.utils import (
@@ -7285,10 +7285,8 @@ class Hotrack:
         
         print(f"\n{'='*70}\n")
 
-    @torch.inference_mode()
-
-
-    # HoGraph online observation subset; source mapping: HOTRACK_INTEGRATION.md.
+    # HoGraph observation subset, sys7498/hograph@bde9c9d2fc7f3778c65099260dbcf04e01b06705.
+    # Source: hograph/tracking/{frame_stages,identity_admission,observation_stage}.py.
     def _detect_handheld_objects(
         self,
         *,
@@ -7894,6 +7892,7 @@ class Hotrack:
         self.frame_idx += 1
         return result
 
+    @torch.inference_mode()
     def process_frame_with_tracking(
         self,
         image_bgr: np.ndarray,

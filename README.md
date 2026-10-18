@@ -59,7 +59,7 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 
 ## Environment Setup
 
-The existing GPU deployment uses the **`uvr_integ`** conda environment. The currently
+The GPU pipelines run in the **`uvr_integ`** conda environment. The currently
 validated server environment is Python 3.10 with PyTorch 2.7.0+cu128.
 
 ```bash
@@ -74,9 +74,8 @@ and the PhysX-3D CUDA extensions (`nvdiffrast`,
 `diff_gaussian_rasterization`, `diffoctreerast`).
 
 The lightweight communication/viewer/recording tools can instead use the
-separate `wiseui_commu` environment described in `_comm/README.md`; the other GPU
-algorithm entry points below keep using `uvr_integ`. The integrated metaobj
-entry point uses `metaboj_hotrack` as described below.
+separate `wiseui_commu` environment described in `_comm/README.md`; the GPU
+algorithm entry points below must use `uvr_integ`.
 
 ### Model weights
 
@@ -104,17 +103,10 @@ reconstructs each part on demand, then aligns the parts and returns them as one
 combined GLB.
 
 ```bash
-conda activate metaboj_hotrack
+conda activate uvr_integ
 python comm_hub.py --port 37001     # terminal 1
 python main_metaobjrecon.py            # terminal 2
 ```
-
-Use `metaboj_hotrack` for the complete HoTrack → TRELLIS → alignment → GLB
-pipeline. On the Linux/NVIDIA execution host, install it with
-`python scripts/setup_metaboj_hotrack.py`, then activate `metaboj_hotrack` in
-both terminals above. No additional runtime option is required. See
-[HOTRACK_INTEGRATION.md](HOTRACK_INTEGRATION.md) for native CUDA dependencies,
-checkpoint paths and the HoGraph methods ported into the existing `Hotrack` class.
 
 Flow: HL2 frame → HoTrack segmentation → **`Space`** per unit → **`a`** per assembly
 → **`Enter`** to align, combine, estimate per-part properties, and export the metaobj

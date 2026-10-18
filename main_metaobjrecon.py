@@ -23,7 +23,7 @@
 이어진다. 사슬이 끊기면 정합 단계에서 걸린다.
 
 실행:
-    conda activate metaboj_hotrack
+    conda activate uvr_integ
     python comm_hub.py --port 37001        # 터미널 1
     python main_metaobjrecon.py          # 터미널 2
 """
@@ -40,13 +40,16 @@ import datetime
 import gc
 import json
 import shutil
+import threading
 import time
 import traceback
 from pathlib import Path
+from queue import Empty, Queue
 
 import cv2
 import numpy as np
 import torch
+import zmq
 from PIL import Image
 
 import hl2_data_pb2 as proto
@@ -201,17 +204,15 @@ def main():
     clear_gpu_memory()
 
     # 무거운 모델 import 는 여기서
+    from modules_hotrack import build_interactive_hotrack_segmentor_from_env
+    from modules_mesh import MeshReconstructor
+    from modules_metaobj import export_metaobj
+    from modules_segment import HOSegmentor
+
     print("\n[Init] segmentor...")
-    if flag_interactive_hotrack:
-        from modules_hotrack import build_interactive_hotrack_segmentor_from_env
-        hosegmentor = build_interactive_hotrack_segmentor_from_env()
-    else:
-        from modules_segment import HOSegmentor
-        hosegmentor = HOSegmentor()
-    meshrecon = None
-    if flag_recon_mesh:
-        from modules_mesh import MeshReconstructor
-        meshrecon = MeshReconstructor()
+    hosegmentor = (build_interactive_hotrack_segmentor_from_env()
+                   if flag_interactive_hotrack else HOSegmentor())
+    meshrecon = MeshReconstructor() if flag_recon_mesh else None
     if meshrecon is not None:
         print("[Init] MeshReconstructor ready")
     estimator = None
@@ -268,17 +269,14 @@ def main():
             frame_idx += 1
             obj_mask = (hosegmentor.get_capture_mask() if flag_interactive_hotrack
                         else result_masks[0] if len(result_masks) else None)
-            if obj_mask is not None:
-                cv2.imshow("Segmentation", np.where(obj_mask[..., None] == 1, color, 3))
+            if obj_mask is None:
+                continue
+
+            cv2.imshow("Segmentation", np.where(obj_mask[..., None] == 1, color, 3))
+            cv2.waitKey(1)
 
             key = read_key_nonblocking(timeout=0.01)
             if not key:
-                continue
-            if key == "q":
-                break
-            if obj_mask is None:
-                if key in (" ", "a", "\r", "\n"):
-                    print("[Capture] 선택한 객체의 유효한 마스크가 없습니다")
                 continue
 
             # ---------- 유닛 캡처 ----------
@@ -339,7 +337,6 @@ def main():
                     meshrecon.pipeline.cpu()   # 정합이 쓸 VRAM 확보
                     clear_gpu_memory()
                 try:
-                    from modules_metaobj import export_metaobj
                     inputs = run_jointtrack(session_dir, units, assemblies, args.device)
                     part_files = [inputs / "glbs" / f"mesh_{i}.glb" for i in range(len(units))]
                     # 세션 이름이 파일 이름이자 GLB 루트 노드 이름이다

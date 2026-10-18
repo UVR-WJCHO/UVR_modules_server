@@ -108,6 +108,12 @@ python comm_hub.py --port 37001     # terminal 1
 python main_metaobjrecon.py            # terminal 2
 ```
 
+For handheld-object tracking and captures, use the `metaboj_hotrack` environment
+and `python main_metaobjrecon.py --track-only`. This mode skips TRELLIS,
+alignment and behavior imports. See [HOTRACK_INTEGRATION.md](HOTRACK_INTEGRATION.md)
+for installation, checkpoint paths and the HoGraph methods ported into the
+existing `Hotrack` class.
+
 Flow: HL2 frame → HoTrack segmentation → **`Space`** per unit → **`a`** per assembly
 → **`Enter`** to align, combine, estimate per-part properties, and export the metaobj
 → `UPLOAD kw=MESH_RESULT` back to HL2.

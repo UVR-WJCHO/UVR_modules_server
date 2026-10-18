@@ -1,7 +1,7 @@
 HoTrack runs inside the existing `modules/hotrack/hotrack.py::Hotrack` class.
 `modules/modules_hotrack.py` keeps the interactive wrapper and calls the same
-`process_frame_with_tracking()` entry point. No separate tracking package or
-second Conda environment is required for the server's tracking entry point.
+`process_frame_with_tracking()` entry point. `metaboj_hotrack` covers the complete
+tracking, reconstruction, alignment and GLB-export path in one Conda environment.
 
 The default interactive wrapper selects the observation-only branch before the
 legacy structural pipeline. It detects portable-object contact (`P`), seeds a
@@ -29,27 +29,52 @@ The detector functions already match the source commit. SAM2 uses one canonical
 configs remain available. Old frame tensors are released even before the first
 object is detected; cleared image slots are not scanned again on every frame.
 
-Create the environment from the repository root:
+Install the complete pipeline from the repository root on the Linux x86_64/NVIDIA
+execution host. Anaconda/Miniconda, Git, a compatible NVIDIA driver and the CUDA
+12.8 toolkit (including `nvcc` and headers) must already be available. Set
+`CUDA_HOME` if the toolkit is not on `PATH`.
 
 ```bash
-conda env create -f environment-metaboj_hotrack.yml
+python scripts/setup_metaboj_hotrack.py
 conda activate metaboj_hotrack
 ```
 
-For an existing environment:
+The installer creates or updates exactly one environment, `metaboj_hotrack`.
+It installs `environment-metaboj_hotrack.yml` first, including Python 3.11,
+PyTorch 2.7.0/cu128, xFormers, spconv and the Python dependencies for HoTrack,
+TRELLIS, alignment, GLB export and the existing behavior/teaser path. It then
+builds the native renderers against that installed PyTorch in the same environment
+with pip build isolation disabled. `conda env create` by itself installs only the
+first phase; use the installer to include the native phase too.
+`constraints-metaboj_hotrack.txt` keeps native installation from replacing the
+shared PyTorch ABI or image-library versions.
+Native runtime dependencies are included in the base manifest. Native packages
+are reinstalled without dependency changes or cached wheels, so updating an
+existing environment does not retain binaries built against an older PyTorch.
 
-```bash
-conda env update -n metaboj_hotrack -f environment-metaboj_hotrack.yml
-```
+| Installation phase | Files and packages |
+| --- | --- |
+| Conda/compiler and Python runtime | `environment-metaboj_hotrack.yml`, `requirements-metaboj_hotrack.txt` |
+| Native renderers and mesh operations | `requirements-metaboj_hotrack-native.txt`: nvdiffrast, PyTorch3D, mip-splatting Gaussian rasterizer, diffoctreerast and the matching Kaolin wheel |
+| SAM2 | The existing `modules/segmentor/sam2_realtime` source, installed editable with its CUDA extension |
 
-The manifest targets Linux/NVIDIA with PyTorch 2.7.0 and CUDA 12.8 wheels. The
-macOS markers install CPU-capable wheels for source inspection. The extracted
-methods do not install the full HoGraph paper runner or its DINO dependencies.
-TRELLIS, mesh-alignment and behavior dependencies remain separate from this
-tracking manifest; add the existing reconstruction dependencies to the same
-environment when enabling that pipeline.
+The source dependencies use fixed commits. `utils3d` comes from the
+EasternJournalist repository used by TRELLIS; the unrelated PyPI package with
+that name is not used. The xFormers and Kaolin wheels match the selected PyTorch
+and CUDA versions. spconv uses its CUDA 12.6 distribution (there is no cu128
+package) with the CUDA 12.x driver/runtime stack. The environment selects
+xFormers attention and the spconv sparse backend, as `modules_mesh.py` expects.
+The former tracking and reconstruction requirements files both include the
+same shared requirements, rather than pinning conflicting versions separately.
 
-Tracking requires two checkpoint files at runtime:
+`rembg` declares the headless OpenCV distribution. The installer restores the
+matching GUI OpenCV wheel after all other packages so the existing `cv2.imshow`
+windows remain available. A graphical session/display is still required for
+those windows. The installer finishes with a package metadata check. It does
+not construct a model, access an API, download a checkpoint or start an inference
+test. It can be rerun to finish a stopped installation in the same environment.
+
+Checkpoints remain outside installation and Git. HoTrack needs:
 
 | Checkpoint | Default path |
 | --- | --- |
@@ -60,23 +85,27 @@ Set `UVR_HOTRACK_YOLO_MODEL` and `UVR_HOTRACK_SAM2_CHECKPOINT` for files stored
 elsewhere. `UVR_HOTRACK_SAM2_VARIANT` must match the SAM checkpoint (`tiny`,
 `small`, `base_plus`, or `large`). `HOGRAPH_PLUS_ROOT` is also supported for
 existing HoGraph weight directories; a sibling `hograph` checkout is searched
-when that variable is unset. The checkpoint paths are checked before loading.
-No model files are downloaded automatically by this integration.
+when that variable is unset. TRELLIS and its image-conditioning weights are
+also required for reconstruction; see [WEIGHTS.md](WEIGHTS.md) for the existing
+server paths. Checkpoint preparation is deferred.
 
-To run tracking and RGB/depth captures without TRELLIS:
+Run the normal server entry point in this environment:
 
 ```bash
+conda activate metaboj_hotrack
 python comm_hub.py --port 37001
-# In another terminal in the same Conda environment:
-python main_metaobjrecon.py --host 127.0.0.1 --port 37001 --track-only
+# In another terminal, also activate metaboj_hotrack:
+python main_metaobjrecon.py --host 127.0.0.1 --port 37001
 ```
 
-`SPACE` saves the chosen object's capture. `a` saves an assembly capture;
-`ENTER` alignment is disabled in `--track-only`. The normal command retains
-reconstruction, manual assembly, export and mesh-result upload. HoGraph's
-automatic structural operations are disabled in both interactive paths.
-Tracking-only mode also accepts RGB packets without depth; saving a capture
-requires depth from the same packet.
+No additional mode flag is required. The loop receives synchronized RGB/depth,
+tracks the hand-associated object and feeds its mask into the existing capture
+and reconstruction code. `SPACE` reconstructs a unit with TRELLIS and writes
+`mesh.glb`; `a` records an assembly capture; `ENTER` aligns and combines the
+captured meshes, exports the metaobj and uploads `MESH_RESULT` through comm_hub.
+The existing behavior step stays enabled by its original `flag_behavior`.
+HoGraph's automatic joining/separation and graph/ID rewrites are excluded from
+the tracker; the server's manual assembly and mesh combination stay enabled.
 
 Click an object to select it for capture. If that object disappears, a capture
 is refused instead of switching objects. Without an explicit selection, the
@@ -91,6 +120,9 @@ Per-frame mask and tracking JSON dumps stay off by default. Enable
 inspection. The wrapper raises an error if structural results unexpectedly
 appear; it does not hide them by rewriting output files.
 
-Validation for this change is limited to parsing, lint and imports without model
-construction. Model inference, HL2 streaming, CUDA performance and the full
-reconstruction pipeline are deferred at the user's request.
+Validation for this update covers Python syntax/lint, static inspection of the
+default reconstruction path, Linux Conda solving in dry-run mode and Linux
+Python-package metadata resolution. The Linux/CUDA
+installation and source builds have not been run on this Mac. No checkpoint
+download, inference, HL2, CUDA performance or full reconstruction test was run;
+those checks are deferred at the user's request.

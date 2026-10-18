@@ -1,0 +1,76 @@
+# Full main_metaobjrecon.py runtime, Linux x86_64 / Python 3.11 / CUDA 12.8.
+# Install through scripts/setup_metaboj_hotrack.py: native builds follow this file.
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# One torch ABI for tracking, TRELLIS, alignment and native renderers.
+torch==2.7.0+cu128
+torchvision==0.22.0+cu128
+xformers @ https://download.pytorch.org/whl/cu128/xformers-0.0.30-cp311-cp311-manylinux_2_28_x86_64.whl
+spconv-cu126==2.3.8
+cumm-cu126==0.7.11
+
+# Shared image/geometry stack. Use the existing server's NumPy/Pillow versions.
+numpy==2.0.1
+scipy==1.15.3
+Pillow==10.4.0
+opencv-python==4.12.0.88
+# rembg declares headless OpenCV. The installer restores the GUI wheel last,
+# so cv2.imshow uses the GUI implementation while package metadata stays valid.
+opencv-python-headless==4.12.0.88
+trimesh==4.7.4
+matplotlib==3.10.5
+networkx==3.4.2
+tqdm==4.67.1
+
+# HoGraph observation / the single in-repo SAM2 implementation.
+hydra-core==1.3.2
+omegaconf==2.3.0
+iopath==0.1.10
+ultralytics==8.4.53
+pycocotools==2.0.11
+
+# comm_hub transport.
+pyzmq==27.0.1
+protobuf==4.25.8
+
+# TRELLIS loading, mesh extraction and GLB export.
+transformers==4.55.2
+huggingface-hub==0.34.4
+safetensors==0.6.2
+easydict==1.13
+imageio==2.37.0
+imageio-ffmpeg==0.6.0
+rembg[cpu]==2.0.67
+onnxruntime==1.22.1
+plyfile==1.1.2
+pymeshfix==0.17.1
+pyvista==0.46.1
+xatlas==0.0.11
+igraph==0.11.9
+pandas==2.3.1
+requests==2.32.4
+aspose-3d==25.8.0
+moderngl==5.12.0
+utils3d @ git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
+
+# Existing behavior/teaser path (no API calls during installation).
+openai==2.43.0
+httpx==0.28.1
+pygltflib==1.16.5
+usd-core==25.8
+warp-lang==1.8.1
+# Runtime dependencies declared by the pinned Kaolin wheel.
+ipython==8.37.0
+ipycanvas==0.14.1
+ipyevents==2.0.2
+jupyter-client==7.4.9
+Flask==3.1.1
+tornado==6.5.2
+comm==0.2.3
+
+# Native build prerequisites, used after torch is installed.
+setuptools==78.1.1
+wheel==0.45.1
+packaging==25.0
+pybind11==2.13.6
+fvcore==0.1.5.post20221221

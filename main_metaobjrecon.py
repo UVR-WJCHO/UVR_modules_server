@@ -40,16 +40,13 @@ import datetime
 import gc
 import json
 import shutil
-import threading
 import time
 import traceback
 from pathlib import Path
-from queue import Empty, Queue
 
 import cv2
 import numpy as np
 import torch
-import zmq
 from PIL import Image
 
 import hl2_data_pb2 as proto
@@ -194,7 +191,10 @@ def main():
     ap.add_argument("--session", default=None,
                     help="캡처를 쌓을 디렉토리 (기본: output/<timestamp>)")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--track-only", action="store_true",
+                    help="손으로 잡은 객체 추적/캡처만 실행 (TRELLIS·정합·물성 추정 제외)")
     args = ap.parse_args()
+    recon_enabled = flag_recon_mesh and not args.track_only
 
     session_dir = Path(args.session or
                        Path("output") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
@@ -204,19 +204,21 @@ def main():
     clear_gpu_memory()
 
     # 무거운 모델 import 는 여기서
-    from modules_hotrack import build_interactive_hotrack_segmentor_from_env
-    from modules_mesh import MeshReconstructor
-    from modules_metaobj import export_metaobj
-    from modules_segment import HOSegmentor
-
     print("\n[Init] segmentor...")
-    hosegmentor = (build_interactive_hotrack_segmentor_from_env()
-                   if flag_interactive_hotrack else HOSegmentor())
-    meshrecon = MeshReconstructor() if flag_recon_mesh else None
+    if flag_interactive_hotrack:
+        from modules_hotrack import build_interactive_hotrack_segmentor_from_env
+        hosegmentor = build_interactive_hotrack_segmentor_from_env()
+    else:
+        from modules_segment import HOSegmentor
+        hosegmentor = HOSegmentor()
+    meshrecon = None
+    if recon_enabled:
+        from modules_mesh import MeshReconstructor
+        meshrecon = MeshReconstructor()
     if meshrecon is not None:
         print("[Init] MeshReconstructor ready")
     estimator = None
-    if flag_behavior:
+    if flag_behavior and not args.track_only:
         from modules_behavior import BehaviorPropertyEstimator
         estimator = BehaviorPropertyEstimator()
         print("[Init] BehaviorPropertyEstimator ready")
@@ -241,10 +243,12 @@ def main():
 
             color = decode_rgb(pkt.image_data)
             depth_m = decode_depth_m(pkt.depth_data)
-            if color is None or depth_m is None:
+            if color is None:
+                continue
+            if depth_m is None and (not args.track_only or not flag_interactive_hotrack):
                 continue
             H, W = color.shape[:2]
-            if depth_m.shape[:2] != (H, W):
+            if depth_m is not None and depth_m.shape[:2] != (H, W):
                 depth_m = cv2.resize(depth_m, (W, H), interpolation=cv2.INTER_NEAREST)
             K = intrinsic_matrix(pkt, W, H)
 
@@ -267,15 +271,22 @@ def main():
                                                       is_first_call, frame_idx)
                     is_first_call = False
             frame_idx += 1
-            if len(result_masks) == 0:
-                continue
-
-            obj_mask = result_masks[0]
-            cv2.imshow("Segmentation", np.where(obj_mask[..., None] == 1, color, 3))
-            cv2.waitKey(1)
+            obj_mask = (hosegmentor.get_capture_mask() if flag_interactive_hotrack
+                        else result_masks[0] if len(result_masks) else None)
+            if obj_mask is not None:
+                cv2.imshow("Segmentation", np.where(obj_mask[..., None] == 1, color, 3))
 
             key = read_key_nonblocking(timeout=0.01)
             if not key:
+                continue
+            if key == "q":
+                break
+            if obj_mask is None:
+                if key in (" ", "a", "\r", "\n"):
+                    print("[Capture] 선택한 객체의 유효한 마스크가 없습니다")
+                continue
+            if key in (" ", "a") and depth_m is None:
+                print("[Capture] RGB 추적은 가능하지만 캡처 저장에는 depth가 필요합니다")
                 continue
 
             # ---------- 유닛 캡처 ----------
@@ -321,6 +332,9 @@ def main():
 
             # ---------- 정합 + 합본 ----------
             elif key in ("\r", "\n"):
+                if args.track_only:
+                    print("[Align] --track-only에서는 재구성·정합을 실행하지 않습니다")
+                    continue
                 if not assemblies:
                     print("[Align] no assembly capture yet")
                     continue
@@ -336,6 +350,7 @@ def main():
                     meshrecon.pipeline.cpu()   # 정합이 쓸 VRAM 확보
                     clear_gpu_memory()
                 try:
+                    from modules_metaobj import export_metaobj
                     inputs = run_jointtrack(session_dir, units, assemblies, args.device)
                     part_files = [inputs / "glbs" / f"mesh_{i}.glb" for i in range(len(units))]
                     # 세션 이름이 파일 이름이자 GLB 루트 노드 이름이다

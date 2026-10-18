@@ -2,7 +2,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -57,6 +57,7 @@ def _env_float(name: str, default: float) -> float:
 def _hograph_plus_fallback(rel_path: str | Path) -> Optional[Path]:
     root_raw = os.environ.get("HOGRAPH_PLUS_ROOT")
     roots = [Path(root_raw).expanduser()] if root_raw else [
+        _REPO_ROOT.parent / "hograph",
         _REPO_ROOT.parent / "hograph_plus",
         _REPO_ROOT.parent.parent / "hograph_plus",
     ]
@@ -67,42 +68,20 @@ def _hograph_plus_fallback(rel_path: str | Path) -> Optional[Path]:
     return None
 
 
-def _sanitize_track_only_result(result: Dict[str, Any]) -> Dict[str, Any]:
-    if not isinstance(result, dict):
-        return result
-    result["runtime_mode"] = "track_only"
-    result["struct_events"] = []
-    result["id_transitions"] = []
-    result["id_remap"] = {}
-    return result
-
-
-def _sanitize_track_only_tracking_json(track_path: Path) -> None:
-    if not track_path.is_file():
-        return
-    try:
-        payload = json.loads(track_path.read_text(encoding="utf-8"))
-    except Exception:
-        return
-    if not isinstance(payload, dict):
-        return
-    payload["runtime_mode"] = "track_only"
-    payload["struct_events"] = []
-    payload["id_transitions"] = []
-    payload["id_remap"] = {}
-    track_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
 def apply_track_only_hotrack_runtime_flags(hotrack: Any) -> None:
-    """Mirror hograph_plus HographPipelineRunner._apply_track_only_hotrack_runtime_flags."""
+    """Select the in-class observation path before processing any frames."""
     hotrack.enable_structural_ops = False
+    hotrack.use_dino_id = False
+    hotrack.enable_id_recovery = False
+    hotrack.compute_dino_similarity = False
+    hotrack.backfill_window = 0
     hotrack.track_hand_masks = False
     hotrack.skip_existing_object_box_prompts = True
     hotrack.skip_existing_object_box_prompts_for_split_candidates = False
     hotrack.use_hand_matched_det_boxes_only = True
     hotrack.use_all_object_boxes = False
     hotrack.enable_component_promote_from_det = False
-    hotrack.enable_detector_guided_single_component_split = True
+    hotrack.enable_detector_guided_single_component_split = False
     hotrack.enable_post_track_duplicate_removal = False
     hotrack.replay_enable_structural_split_logic = False
     hotrack.attach_proxy_backfill_enabled = False
@@ -124,7 +103,8 @@ def build_interactive_hotrack_segmentor_from_env(**overrides: Any) -> "Interacti
         "ho_thresh_hand": _env_float("UVR_HOTRACK_HO_THRESH_HAND", 0.55),
         "ho_thresh_obj": _env_float("UVR_HOTRACK_HO_THRESH_OBJ", 0.55),
         "target_contact_code": os.environ.get("UVR_HOTRACK_TARGET_CONTACT", "P"),
-        "backfill_window": _env_int("UVR_HOTRACK_BACKFILL_WINDOW", 120),
+        "backfill_window": 0,
+        "interactive_window": _env_flag("UVR_HOTRACK_INTERACTIVE_WINDOW", True),
         # per-frame disk dumps (mask PNG/overlay/JSON + tracking JSON) are debug-only
         # and not used by the live pipeline -> off by default (set env=1 to re-enable)
         "save_masks": _env_flag("UVR_HOTRACK_SAVE_MASKS", False),
@@ -165,9 +145,9 @@ class InteractiveHoTrackSegmentor:
         sam2_amp: bool = True,
         sam2_amp_dtype: str = "bfloat16",
         sam2_backend: str = "online",
-        backfill_window: int = 120,
-        use_dino_id: bool = True,
-        enable_id_recovery: bool = True,
+        backfill_window: int = 0,
+        use_dino_id: bool = False,
+        enable_id_recovery: bool = False,
         compute_dino_similarity: bool = False,
         dino_allow_download: bool = False,
         **_: Any,
@@ -228,7 +208,7 @@ class InteractiveHoTrackSegmentor:
         self.hotrack = Hotrack(
             image_dir=str(_abs_repo_path(image_dir)),
             output_root=str(self.output_dir),
-            backfill_window=max(1, int(backfill_window)),
+            backfill_window=0,
             ho_thresh_hand=float(ho_thresh_hand),
             ho_thresh_obj=float(ho_thresh_obj),
             ho_yolo_model_path=str(yolo_path),
@@ -238,9 +218,9 @@ class InteractiveHoTrackSegmentor:
             sam2_amp_dtype=str(sam2_amp_dtype),
             sam2_backend=str(sam2_backend),
             use_cuda=(use_cuda is not False),
-            use_dino_id=bool(use_dino_id),
-            enable_id_recovery=bool(enable_id_recovery),
-            compute_dino_similarity=bool(compute_dino_similarity),
+            use_dino_id=False,
+            enable_id_recovery=False,
+            compute_dino_similarity=False,
             dino_allow_download=bool(dino_allow_download),
         )
         self.hotrack.save_tracking_json = bool(self.save_tracking_json)
@@ -326,7 +306,9 @@ class InteractiveHoTrackSegmentor:
             iou_threshold=self.iou_threshold,
             frame_tag=frame_tag,
         )
-        _sanitize_track_only_result(result)
+        if (result.get("runtime_mode") != "track_only" or result.get("struct_events")
+                or result.get("id_transitions") or result.get("id_remap")):
+            raise RuntimeError("Hotrack entered an unexpected structural runtime")
         self.current_result = result
         self.current_frame_idx = int(result.get("frame_idx", -1))
         self.current_masks = {
@@ -334,10 +316,6 @@ class InteractiveHoTrackSegmentor:
             for k, v in (result.get("tracked_masks", {}) or {}).items()
             if v is not None and np.any(v)
         }
-        if self.save_tracking_json:
-            _sanitize_track_only_tracking_json(
-                Path(self.hotrack.tracking_json_dir) / f"{result.get('frame_tag', frame_tag)}_track.json"
-            )
         self.current_vis = self.render(self.current_frame)
         self._save_current_outputs()
 
@@ -352,6 +330,47 @@ class InteractiveHoTrackSegmentor:
         if self.interactive_window and self.current_vis is not None:
             cv2.imshow(self.window_name, self.current_vis)
         return vis, object_masks, result
+
+    def get_capture_mask(self) -> Optional[np.ndarray]:
+        """Return the selected/hand-associated object at original RGB resolution.
+
+        An explicitly selected but invisible object never falls back to a
+        different object. With multiple unselected tracks, require a current
+        hand-object match instead of using list order.
+        """
+        oid = self.selected_id
+        if oid is None:
+            matches = (self.current_result.get("detections") or {}).get("target_matches", [])
+            ranked = []
+            for candidate_id, mask in self.current_masks.items():
+                if candidate_id < 100 or not np.any(mask):
+                    continue
+                for match in matches:
+                    box = match.get("object_bbox_xyxy")
+                    if not isinstance(box, (list, tuple)) or len(box) != 4:
+                        continue
+                    x1, y1, x2, y2 = [int(value) for value in box]
+                    height, width = mask.shape
+                    x1, x2 = max(0, min(width, x1)), max(0, min(width, x2))
+                    y1, y2 = max(0, min(height, y1)), max(0, min(height, y2))
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+                    overlap = int(np.count_nonzero(mask[y1:y2, x1:x2]))
+                    union = int(np.count_nonzero(mask)) + (x2 - x1) * (y2 - y1) - overlap
+                    if overlap:
+                        ranked.append((overlap / max(1, union), -int(candidate_id)))
+            if ranked:
+                oid = -max(ranked)[1]
+            else:
+                visible = [key for key, mask in self.current_masks.items()
+                           if key >= 100 and np.any(mask)]
+                if len(visible) == 1:
+                    oid = visible[0]
+        self.current_result["capture_object_id"] = oid
+        mask = self.current_masks.get(oid)
+        if mask is None or not np.any(mask):
+            return None
+        return self._upscale_mask(mask)
 
     def render(self, frame: Optional[np.ndarray] = None) -> np.ndarray:
         if frame is None:
@@ -486,7 +505,7 @@ class InteractiveHoTrackSegmentor:
                 mask=self.edit_mask.astype(bool),
             )
             if isinstance(ret, tuple) and len(ret) >= 3:
-                _, obj_ids, logits = ret
+                _, obj_ids, logits = ret[:3]
                 self.hotrack.all_ids = [int(x) for x in list(obj_ids)]
                 if logits is not None and oid in self.hotrack.all_ids:
                     idx = self.hotrack.all_ids.index(oid)

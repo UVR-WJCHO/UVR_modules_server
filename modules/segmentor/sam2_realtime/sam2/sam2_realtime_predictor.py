@@ -4,7 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import warnings
 from collections import OrderedDict
 
 import torch
@@ -13,7 +12,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from sam2.modeling.sam2_base import NO_OBJ_SCORE, SAM2Base
-from sam2.utils.misc import concat_points, fill_holes_in_mask_scores, load_video_frames, load_frame
+from sam2.utils.misc import concat_points, fill_holes_in_mask_scores, load_frame
 
 
 class SAM2RealtimePredictor(SAM2Base):
@@ -48,7 +47,11 @@ class SAM2RealtimePredictor(SAM2Base):
     ):
         """Initialize an inference state."""
         compute_device = self.device  # device of the model
-        img, img_height, img_width = load_frame(img_cv, offload_video_to_cpu=offload_video_to_cpu)
+        img, img_height, img_width = load_frame(
+            img_cv,
+            offload_video_to_cpu=offload_video_to_cpu,
+            compute_device=compute_device,
+        )
         inference_state = {}
         inference_state["images"] = [img]
         inference_state["num_frames"] = len(inference_state["images"])
@@ -94,7 +97,12 @@ class SAM2RealtimePredictor(SAM2Base):
     
     def add_frame(self, inference_state, img_cv, offload_video_to_cpu=False):
         """Load the next frame and update the inference state."""
-        img, _, _ = load_frame(img_cv, offload_video_to_cpu=offload_video_to_cpu)
+        compute_device = inference_state.get("device", self.device)
+        img, _, _ = load_frame(
+            img_cv,
+            offload_video_to_cpu=offload_video_to_cpu,
+            compute_device=compute_device,
+        )
         inference_state["images"].append(img)
         inference_state["num_frames"] = len(inference_state["images"])
         self._get_image_feature(inference_state, frame_idx=inference_state["num_frames"]-1, batch_size=1)
@@ -702,9 +710,12 @@ class SAM2RealtimePredictor(SAM2Base):
 
         # 2) remove old images from inference_state["images"]
         num_images = len(inference_state["images"])
-        for old_idx in range(min_valid_frame_idx):
+        cleared_until = inference_state.get("cleared_images_until", 0)
+        for old_idx in range(cleared_until, min_valid_frame_idx):
             if old_idx < num_images:
                 inference_state["images"][old_idx] = None  # or pop(0), but careful with index shifts
+
+        inference_state["cleared_images_until"] = max(cleared_until, min_valid_frame_idx)
 
         # 3) point_inputs_per_obj, mask_inputs_per_obj
         for obj_idx in list(inference_state["point_inputs_per_obj"].keys()):

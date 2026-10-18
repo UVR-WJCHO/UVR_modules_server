@@ -8,7 +8,8 @@ import time
 import copy
 import math
 from collections import deque
-from typing import Any, Dict, List, Optional, Tuple, Set
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple, Set, Mapping, Sequence
 
 import cv2
 import numpy as np
@@ -60,7 +61,7 @@ for p in [SAM2_IMPORT_ROOT, SAM2_ROOT, PROJECT_ROOT]:
 from hotrack.detector import build_detector, detect_image_bgr
 
 # SAM2 모듈 import
-from sam2_realtime.sam2.build_sam import build_sam2_realtime_predictor, build_sam2_video_predictor
+from sam2.build_sam import build_sam2_realtime_predictor, build_sam2_video_predictor
 
 # Utils 모듈 import
 from hotrack.utils import (
@@ -316,6 +317,55 @@ class _OfflineSam2VideoAdapter:
             self._main_state_claimed = False
             return out
         return self._build_realtime_fallback().reset_state(state)
+
+
+# Ported from sys7498/hograph@bde9c9d2fc7f3778c65099260dbcf04e01b06705.
+DetectionPayload = Dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class InteractionDetectionPolicy:
+    """Immutable detector/association settings for one sequence."""
+
+    use_cuda: bool
+    hand_threshold: float
+    object_threshold: float
+    hand_matched_boxes_only: bool
+    use_all_object_boxes: bool
+    max_object_area_ratio: float
+    max_object_vs_hand_ratio: float
+    track_hand_masks: bool
+    enforce_hand_relative_area_cap: bool = True
+    require_target_contact_match: bool = False
+
+@dataclass(slots=True)
+class InteractionDetectionResult:
+    """All outputs of detection and hand-object target association."""
+
+    detections: DetectionPayload
+    detections_raw: DetectionPayload
+    detected_hands: list[dict[str, Any]]
+    detected_objects: list[dict[str, Any]]
+    target_boxes: list[list[int]]
+    target_matches: list[dict[str, Any]]
+    selected_target_object_ids: set[int]
+    selected_target_hand_ids: set[int]
+    current_hand_boxes: list[list[int]]
+    current_hand_proxy_masks: list[np.ndarray]
+    rejection_events: list[dict[str, Any]]
+    duration_seconds: float
+
+@dataclass(frozen=True, slots=True)
+class ProjectedIdentityAdmission:
+    """Immutable result of one detector-projected admission decision."""
+
+    creates_new_identity: bool
+    identity_mask: np.ndarray
+    event_mask: np.ndarray
+    incident_track_ids: tuple[int, ...]
+    best_track_id: int | None
+    best_overlap: float
+    reason: str
 
 
 class Hotrack:
@@ -7236,6 +7286,614 @@ class Hotrack:
         print(f"\n{'='*70}\n")
 
     @torch.inference_mode()
+
+
+    # HoGraph online observation subset; source mapping: HOTRACK_INTEGRATION.md.
+    def _detect_handheld_objects(
+        self,
+        *,
+        model: Any,
+        image_bgr: np.ndarray,
+        policy: InteractionDetectionPolicy,
+        target_contact_code: str,
+    ) -> InteractionDetectionResult:
+        height, width = image_bgr.shape[:2]
+        start = time.time()
+        detections_raw = detect_image_bgr(
+            model,
+            image_bgr,
+            use_cuda=bool(policy.use_cuda),
+            thresh_hand=float(policy.hand_threshold),
+            thresh_obj=float(policy.object_threshold),
+        )
+        detections = copy.deepcopy(detections_raw)
+        if policy.hand_matched_boxes_only:
+            detections = self._suppress_non_target_matches_for_same_object(
+                detections,
+                target_contact_code=str(target_contact_code),
+            )
+        duration = time.time() - start
+
+        detected_hands = list(detections.get("hands", []) or [])
+        detected_objects = list(detections.get("objects", []) or [])
+        matches_raw = detections.get("matches", [])
+        if not isinstance(matches_raw, list):
+            matches_raw = []
+
+        match_by_object = self._best_matches_by_object(
+            matches_raw=matches_raw,
+            detected_hands=detected_hands,
+            detected_objects=detected_objects,
+            hand_matched_boxes_only=policy.hand_matched_boxes_only,
+        )
+        target_matches, target_boxes, selected_objects, selected_hands = self._collect_targets(
+            match_by_object=match_by_object,
+            detected_objects=detected_objects,
+            policy=policy,
+            target_contact_code=str(target_contact_code),
+        )
+        (
+            target_matches,
+            target_boxes,
+            rejection_events,
+            suppressed_rows,
+        ) = self._filter_oversize_targets(
+            target_matches=target_matches,
+            detected_hands=detected_hands,
+            height=int(height),
+            width=int(width),
+            policy=policy,
+        )
+        selected_objects = {
+            int(row.get("object_idx"))
+            for row in target_matches
+            if isinstance(row, Mapping) and row.get("object_idx") is not None
+        }
+        selected_hands = {
+            int(row.get("hand_idx"))
+            for row in target_matches
+            if isinstance(row, Mapping)
+            and row.get("hand_idx") is not None
+            and int(row.get("hand_idx")) >= 0
+        }
+        detections["target_contact_code"] = str(target_contact_code)
+        detections["target_object_idxs"] = sorted(selected_objects)
+        detections["target_hand_idxs"] = sorted(selected_hands)
+        detections["target_matches"] = target_matches
+        detections["suppressed_large_target_matches"] = len(suppressed_rows)
+        detections["suppressed_large_target_rows"] = suppressed_rows
+
+        current_hand_boxes = [hand["bbox_xyxy"] for hand in detected_hands]
+        current_hand_proxy_masks = self._hand_proxy_masks(
+            current_hand_boxes=current_hand_boxes,
+            height=int(height),
+            width=int(width),
+            enabled=not policy.track_hand_masks,
+        )
+        return InteractionDetectionResult(
+            detections=detections,
+            detections_raw=detections_raw,
+            detected_hands=detected_hands,
+            detected_objects=detected_objects,
+            target_boxes=target_boxes,
+            target_matches=target_matches,
+            selected_target_object_ids=selected_objects,
+            selected_target_hand_ids=selected_hands,
+            current_hand_boxes=current_hand_boxes,
+            current_hand_proxy_masks=current_hand_proxy_masks,
+            rejection_events=rejection_events,
+            duration_seconds=float(duration),
+        )
+
+    @staticmethod
+    def _best_matches_by_object(
+        *,
+        matches_raw: Sequence[Any],
+        detected_hands: Sequence[Mapping[str, Any]],
+        detected_objects: Sequence[Mapping[str, Any]],
+        hand_matched_boxes_only: bool,
+    ) -> dict[int, dict[str, Any]]:
+        best: dict[int, dict[str, Any]] = {}
+        for match in matches_raw:
+            if not isinstance(match, Mapping):
+                continue
+            hand_idx = match.get("hand_idx")
+            object_idx = match.get("object_idx", -1)
+            if hand_idx is None:
+                continue
+            try:
+                hand_idx = int(hand_idx)
+                object_idx = int(object_idx)
+            except (TypeError, ValueError):
+                continue
+            if object_idx < 0:
+                continue
+            if hand_matched_boxes_only and (
+                hand_idx < 0
+                or hand_idx >= len(detected_hands)
+                or object_idx >= len(detected_objects)
+            ):
+                continue
+            hand: Mapping[str, Any] = {}
+            if 0 <= hand_idx < len(detected_hands):
+                candidate = detected_hands[hand_idx]
+                if isinstance(candidate, Mapping):
+                    hand = candidate
+            object_box = match.get("object_bbox_xyxy")
+            if (
+                not isinstance(object_box, (list, tuple)) or len(object_box) != 4
+            ) and 0 <= object_idx < len(detected_objects):
+                object_row = detected_objects[object_idx]
+                if isinstance(object_row, Mapping):
+                    object_box = object_row.get("bbox_xyxy")
+            if not isinstance(object_box, (list, tuple)) or len(object_box) != 4:
+                continue
+            try:
+                hand_score = float(match.get("hand_score") or 0.0)
+            except (TypeError, ValueError):
+                hand_score = 0.0
+            try:
+                object_score = float(match.get("object_score") or 0.0)
+            except (TypeError, ValueError):
+                object_score = 0.0
+            previous = best.get(object_idx)
+            if previous is None or hand_score > float(previous.get("hand_score", -1.0)):
+                best[object_idx] = {
+                    "hand_idx": int(hand_idx),
+                    "object_idx": int(object_idx),
+                    "contact_code": hand.get("contact_code"),
+                    "contact_text": hand.get("contact_text"),
+                    "hand_score": float(hand_score),
+                    "hand_lr": hand.get("lr"),
+                    "object_score": float(object_score),
+                    "object_bbox_xyxy": [int(value) for value in object_box],
+                }
+        return best
+
+    @staticmethod
+    def _collect_targets(
+        *,
+        match_by_object: Mapping[int, Mapping[str, Any]],
+        detected_objects: Sequence[Mapping[str, Any]],
+        policy: InteractionDetectionPolicy,
+        target_contact_code: str,
+    ) -> tuple[list[dict[str, Any]], list[list[int]], set[int], set[int]]:
+        target_matches: list[dict[str, Any]] = []
+        target_boxes: list[list[int]] = []
+        selected_objects: set[int] = set()
+        selected_hands: set[int] = set()
+        for object_idx in sorted(match_by_object):
+            entry = dict(match_by_object[object_idx])
+            if bool(policy.require_target_contact_match) and str(
+                entry.get("contact_code") or ""
+            ) != str(target_contact_code):
+                continue
+            target_matches.append(entry)
+            selected_objects.add(int(object_idx))
+            selected_hands.add(int(entry.get("hand_idx", -1)))
+            object_box = entry.get("object_bbox_xyxy")
+            if object_box is not None:
+                target_boxes.append([int(value) for value in object_box])
+        if policy.use_all_object_boxes and not policy.hand_matched_boxes_only:
+            for object_idx, object_row in enumerate(detected_objects):
+                if object_idx in selected_objects or not isinstance(object_row, Mapping):
+                    continue
+                object_box = object_row.get("bbox_xyxy")
+                if not isinstance(object_box, (list, tuple)) or len(object_box) != 4:
+                    continue
+                try:
+                    object_score = float(object_row.get("score") or 0.0)
+                except (TypeError, ValueError):
+                    object_score = 0.0
+                if object_score < float(policy.object_threshold):
+                    continue
+                box = [int(value) for value in object_box]
+                target_boxes.append(box)
+                selected_objects.add(int(object_idx))
+                target_matches.append(
+                    {
+                        "hand_idx": -1,
+                        "object_idx": int(object_idx),
+                        "contact_code": None,
+                        "contact_text": "unmatched_object",
+                        "hand_score": 0.0,
+                        "hand_lr": None,
+                        "object_score": float(object_score),
+                        "object_bbox_xyxy": box,
+                        "source": "all_object_boxes",
+                    }
+                )
+        return target_matches, target_boxes, selected_objects, selected_hands
+
+    @staticmethod
+    def _filter_oversize_targets(
+        *,
+        target_matches: Sequence[Mapping[str, Any]],
+        detected_hands: Sequence[Mapping[str, Any]],
+        height: int,
+        width: int,
+        policy: InteractionDetectionPolicy,
+    ) -> tuple[
+        list[dict[str, Any]],
+        list[list[int]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ]:
+        frame_area = float(max(1, height * width))
+        hand_box_areas: list[float] = []
+        for hand_row in detected_hands:
+            if not isinstance(hand_row, Mapping):
+                continue
+            box = hand_row.get("bbox_xyxy")
+            if not isinstance(box, (list, tuple)) or len(box) != 4:
+                continue
+            try:
+                x1, y1, x2, y2 = [int(value) for value in box[:4]]
+            except (TypeError, ValueError):
+                continue
+            area = float(max(0, x2 - x1) * max(0, y2 - y1))
+            if area > 0.0:
+                hand_box_areas.append(area)
+        hand_area_reference = max(hand_box_areas) if hand_box_areas else 0.0
+
+        accepted: list[dict[str, Any]] = []
+        boxes: list[list[int]] = []
+        rejection_events: list[dict[str, Any]] = []
+        suppressed_rows: list[dict[str, Any]] = []
+        for raw_entry in target_matches:
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            raw_box = entry.get("object_bbox_xyxy")
+            if not isinstance(raw_box, (list, tuple)) or len(raw_box) != 4:
+                continue
+            try:
+                x1, y1, x2, y2 = [int(value) for value in raw_box[:4]]
+            except (TypeError, ValueError):
+                continue
+            box = [x1, y1, x2, y2]
+            box_area = float(max(0, x2 - x1) * max(0, y2 - y1))
+            image_ratio = float(box_area / frame_area)
+            hand_ratio = (
+                float(box_area / max(1e-6, hand_area_reference))
+                if hand_area_reference > 0.0
+                else 0.0
+            )
+            reason = None
+            if image_ratio > float(policy.max_object_area_ratio):
+                reason = "bbox_ratio_global"
+            elif (
+                bool(policy.enforce_hand_relative_area_cap)
+                and hand_area_reference > 0.0
+                and hand_ratio > float(policy.max_object_vs_hand_ratio)
+            ):
+                reason = "bbox_vs_hand_ratio_global"
+            if reason is not None:
+                suppressed_rows.append(
+                    {
+                        "reason": reason,
+                        "box": box,
+                        "bbox_area_ratio": image_ratio,
+                        "bbox_vs_hand_ratio": (hand_ratio if hand_area_reference > 0.0 else None),
+                        "object_idx": (
+                            int(entry.get("object_idx", -1))
+                            if entry.get("object_idx") is not None
+                            else -1
+                        ),
+                        "hand_idx": (
+                            int(entry.get("hand_idx", -1))
+                            if entry.get("hand_idx") is not None
+                            else -1
+                        ),
+                    }
+                )
+                rejection_events.append(
+                    {
+                        "kind": "object",
+                        "stage": "target_box_global_gate",
+                        "reason": reason,
+                        "box": box,
+                        "bbox_area_ratio": image_ratio,
+                        "bbox_vs_hand_ratio": (hand_ratio if hand_area_reference > 0.0 else None),
+                    }
+                )
+                continue
+            accepted.append(entry)
+            boxes.append(box)
+        return accepted, boxes, rejection_events, suppressed_rows
+
+    @staticmethod
+    def _hand_proxy_masks(
+        *,
+        current_hand_boxes: Sequence[Sequence[int]],
+        height: int,
+        width: int,
+        enabled: bool,
+    ) -> list[np.ndarray]:
+        if not enabled:
+            return []
+        masks: list[np.ndarray] = []
+        for raw_box in current_hand_boxes:
+            if not isinstance(raw_box, (list, tuple)) or len(raw_box) != 4:
+                continue
+            try:
+                x1, y1, x2, y2 = [int(value) for value in raw_box[:4]]
+            except (TypeError, ValueError):
+                continue
+            x1 = max(0, min(width - 1, x1))
+            x2 = max(0, min(width, x2))
+            y1 = max(0, min(height - 1, y1))
+            y2 = max(0, min(height, y2))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            mask = np.zeros((height, width), dtype=bool)
+            mask[y1:y2, x1:x2] = True
+            masks.append(mask)
+        return masks
+
+    @staticmethod
+    def _project_mask(mask: np.ndarray, box: Sequence[int]) -> np.ndarray:
+        binary = np.asarray(mask).astype(bool)
+        if binary.ndim != 2:
+            raise ValueError("identity admission requires a two-dimensional mask")
+        if len(box) != 4:
+            raise ValueError("detector box must contain four coordinates")
+        height, width = binary.shape
+        x1, y1, x2, y2 = [int(value) for value in box]
+        x1, x2 = max(0, min(width, x1)), max(0, min(width, x2))
+        y1, y2 = max(0, min(height, y1)), max(0, min(height, y2))
+        projected = np.zeros_like(binary, dtype=bool)
+        if x2 > x1 and y2 > y1:
+            projected[y1:y2, x1:x2] = binary[y1:y2, x1:x2]
+        return projected
+
+    @staticmethod
+    def detector_projected_identity_admission(
+        *,
+        raw_mask: np.ndarray,
+        detector_box: Sequence[int],
+        existing_masks: Mapping[int, np.ndarray],
+        overlap_threshold: float,
+        always_project: bool = False,
+    ) -> ProjectedIdentityAdmission:
+        """Admit an identity iff its detector-projected support is unassigned.
+
+        An edge joins the projected candidate to an active track when either
+        directional intersection-over-area reaches the shared overlap threshold.
+        The candidate creates a new identity only when it has nonempty projected
+        support and degree zero.  With active tracks present, the projected mask is
+        the identity support; the raw mask is always retained as event evidence.
+        """
+
+        threshold = float(overlap_threshold)
+        if not np.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+            raise ValueError("overlap_threshold must be finite and in [0, 1]")
+        raw = np.asarray(raw_mask).astype(bool)
+        projected = Hotrack._project_mask(raw, detector_box)
+        scored: list[tuple[float, int]] = []
+        valid_existing = 0
+        for track_id, existing_mask in existing_masks.items():
+            existing = np.asarray(existing_mask).astype(bool)
+            if existing.shape != raw.shape or not existing.any():
+                continue
+            valid_existing += 1
+            _, existing_to_candidate, candidate_to_existing = calculate_ioa_bidirectional(
+                existing, projected
+            )
+            scored.append((float(max(existing_to_candidate, candidate_to_existing)), int(track_id)))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        incident = tuple(sorted(track_id for score, track_id in scored if score >= threshold))
+        best_score, best_id = scored[0] if scored else (0.0, None)
+        if not projected.any():
+            creates_new = False
+            reason = "empty_detector_projection"
+        elif incident:
+            creates_new = False
+            reason = "assigned_to_active_identity"
+        else:
+            creates_new = True
+            reason = "unassigned_detector_projection"
+        identity = (
+            projected
+            if bool(always_project) or not projected.any() or valid_existing > 0
+            else raw
+        )
+        return ProjectedIdentityAdmission(
+            creates_new_identity=bool(creates_new),
+            identity_mask=identity.copy(),
+            event_mask=raw.copy(),
+            incident_track_ids=incident,
+            best_track_id=None if best_id is None else int(best_id),
+            best_overlap=float(best_score),
+            reason=reason,
+        )
+
+    def _process_frame_tracking_only(
+        self,
+        image_bgr: np.ndarray,
+        *,
+        target_contact_code: str = "P",
+        iou_threshold: float = 0.5,
+        frame_tag: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Online subset of HoGraph observation; no structural stages are entered.
+
+        Detection/association and detector-projected identity admission are copied
+        from hograph bde9c9d. SAM2 init/add/get/prompt follows Hotrack and
+        ObservationStage.run; flat attributes retain the server's existing API.
+        """
+        if image_bgr.ndim != 3 or image_bgr.shape[2] != 3 or image_bgr.dtype != np.uint8:
+            raise ValueError("Hotrack expects an HxWx3 uint8 BGR frame")
+        height, width = image_bgr.shape[:2]
+        if self.inference_state is not None and (
+            int(self.inference_state["video_height"]) != height
+            or int(self.inference_state["video_width"]) != width
+        ):
+            raise ValueError("frame resolution changed; reset_tracker_state() before continuing")
+        self._sam2_timing_frame = {}
+        self.events = []
+        self._struct_events_frame = []
+        self._id_transitions_frame = []
+        start = time.perf_counter()
+        if self.inference_state is None:
+            self.inference_state = self.sam2_tracker.init_state(image_bgr)
+        else:
+            self.inference_state = self.sam2_tracker.add_frame(self.inference_state, image_bgr)
+        detection = self._detect_handheld_objects(
+            model=self.ho_model,
+            image_bgr=image_bgr,
+            policy=InteractionDetectionPolicy(
+                use_cuda=bool(self.use_cuda),
+                hand_threshold=float(self.ho_thresh_hand),
+                object_threshold=float(self.ho_thresh_obj),
+                hand_matched_boxes_only=True,
+                use_all_object_boxes=False,
+                max_object_area_ratio=float(self.max_obj_area_ratio),
+                max_object_vs_hand_ratio=float(self.max_obj_vs_hand_ratio),
+                track_hand_masks=False,
+                require_target_contact_match=True,
+            ),
+            target_contact_code=str(target_contact_code),
+        )
+        timing = {"ho_detection": detection.duration_seconds}
+        tracked_masks: Dict[int, np.ndarray] = {}
+        tracked_boxes: Dict[int, List[int]] = {}
+        t_track = time.perf_counter()
+        if self.all_ids:
+            _, self.all_ids, logits, self.inference_state = self.sam2_tracker.get_mask(
+                self.inference_state, self.frame_idx
+            )
+            if logits is not None:
+                for index, oid in enumerate(self.all_ids):
+                    if index >= len(logits) or int(oid) < 100:
+                        continue
+                    mask = self._logits_to_bool_mask(logits[index], height, width)
+                    if np.count_nonzero(mask) >= self.min_mask_area:
+                        tracked_masks[int(oid)] = mask
+                        tracked_boxes[int(oid)] = self._get_mask_bbox(mask)
+        timing["sam2_tracking"] = time.perf_counter() - t_track
+        new_objects: List[int] = []
+        rejections = list(detection.rejection_events)
+        hand_area_ref = max((float(np.sum(m)) for m in detection.current_hand_proxy_masks), default=0.0)
+        t_objects = time.perf_counter()
+        for box in detection.target_boxes:
+            # ObservationStage.run: avoid re-prompting an already propagated object.
+            bx1, by1, bx2, by2 = box
+            box_area = float(max(1, (bx2 - bx1) * (by2 - by1)))
+            existing_match = False
+            for existing_box in tracked_boxes.values():
+                ex1, ey1, ex2, ey2 = existing_box
+                intersection = float(max(0, min(bx2, ex2) - max(bx1, ex1)) * max(0, min(by2, ey2) - max(by1, ey1)))
+                if (bbox_iou(box, existing_box) >= self.existing_object_box_iou_skip_th
+                        or intersection / box_area >= self.existing_object_box_cover_skip_th):
+                    existing_match = True
+                    break
+            if existing_match:
+                continue
+            # ObservationStage.run: allocate monotonically, seed by detector box.
+            object_id = int(self.next_obj_id)
+            self.next_obj_id += 1
+            _, self.all_ids, logits, self.inference_state = self.sam2_tracker.add_new_points_or_box(
+                self.inference_state,
+                frame_idx=self.frame_idx,
+                obj_id=object_id,
+                box=np.asarray(box, dtype=np.float32),
+            )
+            accepted = False
+            try:
+                if logits is None or object_id not in self.all_ids:
+                    continue
+                mask = self._logits_to_bool_mask(logits[self.all_ids.index(object_id)], height, width)
+                # Same positive interior-point refinement as the source observation stage.
+                if self.enable_prompt_refinement and np.any(mask):
+                    centers = self._mask_uniform_points(mask, max_points=self.dt_point_count, min_dist=self.dt_point_min_dist)
+                    if not centers:
+                        centers = self._mask_center_points_dt(mask, max_points=self.dt_point_count, min_dist=self.dt_point_min_dist)
+                    if centers:
+                        _, self.all_ids, refined, self.inference_state = self.sam2_tracker.add_new_points_or_box(
+                            self.inference_state,
+                            frame_idx=self.frame_idx,
+                            obj_id=object_id,
+                            points=np.asarray(centers, dtype=np.float32),
+                            labels=np.ones(len(centers), dtype=np.int32),
+                            clear_old_points=True,
+                        )
+                        if refined is not None and object_id in self.all_ids:
+                            refined_mask = self._logits_to_bool_mask(refined[self.all_ids.index(object_id)], height, width)
+                            if np.any(refined_mask):
+                                mask = refined_mask
+                area = float(np.count_nonzero(mask))
+                if (area < self.min_mask_area
+                        or area / float(height * width) > self.max_obj_area_ratio
+                        or (hand_area_ref > 0 and area / hand_area_ref > self.max_obj_vs_hand_ratio)):
+                    rejections.append({"obj_id": object_id, "reason": "candidate_size"})
+                    continue
+                admission = self.detector_projected_identity_admission(
+                    raw_mask=mask,
+                    detector_box=box,
+                    existing_masks=tracked_masks,
+                    overlap_threshold=float(iou_threshold),
+                )
+                if not admission.creates_new_identity or np.count_nonzero(admission.identity_mask) < self.min_mask_area:
+                    rejections.append({"obj_id": object_id, "reason": admission.reason})
+                    continue
+                mask = admission.identity_mask
+                # Keep the admitted support and the SAM2 memory in agreement.
+                if not np.array_equal(mask, admission.event_mask):
+                    mask_result = self.sam2_tracker.add_new_mask(
+                        self.inference_state, frame_idx=self.frame_idx, obj_id=object_id, mask=mask
+                    )
+                    _, self.all_ids, _ = mask_result[:3]
+                    if len(mask_result) == 4:
+                        self.inference_state = mask_result[3]
+                tracked_masks[object_id] = mask
+                tracked_boxes[object_id] = self._get_mask_bbox(mask)
+                new_objects.append(object_id)
+                self.events.append({"type": "new_object", "frame": int(self.frame_idx), "obj_id": object_id})
+                accepted = True
+            finally:
+                # A rejected prompt must not survive as an invisible SAM2 object.
+                if not accepted:
+                    self.all_ids, _ = self.sam2_tracker.remove_object(
+                        self.inference_state, object_id, strict=False, need_output=False
+                    )
+        timing["object_processing"] = time.perf_counter() - t_objects
+        if self.frame_idx > 9:
+            self.sam2_tracker.clear_old_frames(self.inference_state, self.frame_idx - 9)
+        self._prev_tracked_masks = {oid: mask.copy() for oid, mask in tracked_masks.items()}
+        for oid, mask in tracked_masks.items():
+            self.mask_history.setdefault(oid, deque(maxlen=self.mask_history_length)).append((self.frame_idx, mask.copy()))
+        for key, value in self._sam2_timing_frame.items():
+            timing[key] = float(value)
+        timing["total"] = time.perf_counter() - start
+        result = {
+            "runtime_mode": "track_only",
+            "frame_idx": int(self.frame_idx),
+            "frame_tag": frame_tag or f"{self.frame_idx:06d}",
+            "detections": detection.detections,
+            "detections_raw": detection.detections_raw,
+            "tracked_masks": {oid: mask.astype(np.uint8) for oid, mask in tracked_masks.items()},
+            "tracked_boxes": tracked_boxes,
+            "all_ids": list(self.all_ids),
+            "object_ids": sorted(tracked_masks),
+            "hand_ids": [],
+            "new_objects": new_objects,
+            "new_hands": [],
+            "events": list(self.events),
+            "struct_events": [],
+            "id_transitions": [],
+            "id_remap": {},
+            "rejections": rejections,
+            "timing": timing,
+        }
+        if self.save_tracking_json:
+            payload = {key: value for key, value in result.items() if key not in {"tracked_masks", "detections_raw"}}
+            out = os.path.join(self.tracking_json_dir, f"{result['frame_tag']}_track.json")
+            with open(out, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+        self.frame_idx += 1
+        return result
+
     def process_frame_with_tracking(
         self,
         image_bgr: np.ndarray,
@@ -7257,6 +7915,11 @@ class Hotrack:
             Dict with keys: frame_idx, detections, new_hands, new_objects,
             tracked_masks, tracked_boxes, all_ids, hand_ids, object_ids, events, timing
         """
+        if not self.enable_structural_ops:
+            return self._process_frame_tracking_only(
+                image_bgr, target_contact_code=target_contact_code,
+                iou_threshold=iou_threshold, frame_tag=frame_tag,
+            )
         timing = {}
         self._sam2_timing_frame = {}
         height, width = image_bgr.shape[:2]

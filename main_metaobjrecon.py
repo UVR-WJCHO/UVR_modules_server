@@ -101,12 +101,16 @@ def intrinsic_matrix(pkt, w, h):
 
 
 def save_capture(dir_path: Path, color, depth_m, K, obj_mask):
-    """meshalignment 가 요구하는 네 파일. mesh.glb 는 유닛 캡처에서만 따로 쓴다."""
+    """meshalignment 가 요구하는 네 파일. mesh.glb 는 유닛 캡처에서만 따로 쓴다.
+
+    depth 가 없으면 depth.npy 만 빼고 쓴다. 메시는 만들 수 있지만 그 캡처는 정합에 못 쓴다.
+    """
     dir_path.mkdir(parents=True, exist_ok=True)
     masked = np.where(obj_mask[..., None] == 1, color, 3)
     cv2.imwrite(str(dir_path / "rgb.png"), color)
     cv2.imwrite(str(dir_path / "rgb_masked.png"), masked)
-    np.save(dir_path / "depth.npy", depth_m)
+    if depth_m is not None:
+        np.save(dir_path / "depth.npy", depth_m)
     np.save(dir_path / "intrinsic.npy", K)
 
 
@@ -228,6 +232,7 @@ def main():
     assemblies = []      # (조립 캡처 이름, [그 안의 유닛])
     is_first_call = True
     frame_idx = 0
+    depth_missing = False   # 상태가 바뀔 때만 알린다. 매 프레임 찍으면 로그가 묻힌다
 
     print("\n[Ready] SPACE=유닛 캡처   a=조립 캡처   ENTER=정합+합본   q=종료")
     console_state = enable_cbreak_stdin()
@@ -240,11 +245,17 @@ def main():
             pkt.ParseFromString(data)
 
             color = decode_rgb(pkt.image_data)
-            depth_m = decode_depth_m(pkt.depth_data)
-            if color is None or depth_m is None:
+            if color is None:
                 continue
             H, W = color.shape[:2]
-            if depth_m.shape[:2] != (H, W):
+            # depth 가 없어도 시각화·세그멘테이션·메시 생성은 된다. 정합(ENTER)만 depth 가 필요하다.
+            depth_m = decode_depth_m(pkt.depth_data)
+            if (depth_m is None) != depth_missing:
+                depth_missing = depth_m is None
+                print("\n[Warn] HL2 가 depth 를 보내지 않는다. 시각화·세그멘테이션·메시 생성은 "
+                      "계속하지만, 이 상태로 찍은 캡처는 ENTER 정합에 쓸 수 없다." if depth_missing
+                      else "\n[Info] depth 수신 재개", flush=True)
+            if depth_m is not None and depth_m.shape[:2] != (H, W):
                 depth_m = cv2.resize(depth_m, (W, H), interpolation=cv2.INTER_NEAREST)
             K = intrinsic_matrix(pkt, W, H)
 
@@ -260,6 +271,8 @@ def main():
                 with torch.inference_mode():
                     _, result_masks, _ = hosegmentor.process_frame(color.copy())
             else:
+                if depth_m is None:
+                    continue          # legacy HOSegmentor 는 depth 로 손·물체를 찾는다
                 with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                     depth_cm = depth_m * 100.0
                     hotrack_datas = hosegmentor.get_hotrack_datas(color, depth_cm)
@@ -284,7 +297,8 @@ def main():
                 name = str(len(units))
                 cap = session_dir / f"part_{name}"
                 save_capture(cap, color, depth_m, K, obj_mask)
-                print(f"\n[Unit {name}] captured -> {cap}")
+                print(f"\n[Unit {name}] captured -> {cap}"
+                      + ("  (depth 없음: 메시는 만들지만 정합에는 못 쓴다)" if depth_m is None else ""))
 
                 if meshrecon is None:
                     units.append(name)
@@ -318,12 +332,18 @@ def main():
                 save_capture(cap, color, depth_m, K, obj_mask)
                 assemblies = [(c, m) for c, m in assemblies if c != name]
                 assemblies.append((name, members))
-                print(f"\n[Assembly {name}] captured (units {members}) -> {cap}")
+                print(f"\n[Assembly {name}] captured (units {members}) -> {cap}"
+                      + ("  (depth 없음: 정합에 못 쓴다)" if depth_m is None else ""))
 
             # ---------- 정합 + 합본 ----------
             elif key in ("\r", "\n"):
                 if not assemblies:
                     print("[Align] no assembly capture yet")
+                    continue
+                no_depth = [f"part_{n}" for n in units + [c for c, _ in assemblies]
+                            if not (session_dir / f"part_{n}" / "depth.npy").exists()]
+                if no_depth:
+                    print(f"[Align] depth 없이 찍힌 캡처가 있어 정합할 수 없다: {no_depth}")
                     continue
                 print(f"\n[Align] units={units}  assemblies={[c for c, _ in assemblies]}")
                 # ENTER 를 치는 시점에는 완전히 조립된 물체가 카메라 앞에 있다.

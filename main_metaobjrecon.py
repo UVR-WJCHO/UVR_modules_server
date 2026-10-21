@@ -131,6 +131,64 @@ def clear_gpu_memory():
 
 
 # --- 정합 + 합본 ---
+TARGET_LOST_FRAMES = 15   # 고정한 물체가 이만큼 연속으로 안 보이면 놓는다 (25 fps 에서 약 0.6 s)
+
+
+class CaptureTarget:
+    """HoTrack 창을 클릭하지 않아도 캡처 대상을 한 물체로 유지한다.
+
+    HL2 를 쓴 사람은 서버의 HoTrack 창을 클릭할 수 없다. 선택이 없으면 get_capture_mask()
+    가 매 프레임 새로 고르는데, 물체를 쥐고 가만히 있어도 HoTrack 이 두 번째 트랙을 1 초
+    간격으로 만들었다 지우면 그 프레임마다 고르지 못한다. 측정해 보니 프레임의 60 % 가
+    그랬고, Segmentation 창과 키 입력이 그만큼 끊겼다. 클릭은 selected_id 를 정하는 것이
+    전부라, 처음 정해진 대상을 같은 방식으로 고정한다. 놓는 경우는 셋이다.
+      - 고정한 물체가 TARGET_LOST_FRAMES 프레임 연속 안 보일 때
+      - 고정한 물체가 보이는데 손-물체 매칭이 다른 물체를 가리킬 때 (그쪽으로 옮긴다)
+      - 캡처(SPACE / a) 직후. 다음 유닛은 다른 물체를 들고 찍는다
+    사람이 직접 클릭한 선택도 같은 규칙으로 다룬다.
+    """
+
+    def __init__(self, seg):
+        self.seg = seg
+        self.missed = 0
+
+    def mask(self):
+        seg = self.seg
+        locked = seg.selected_id
+        # 선택 없이 규칙만으로 이번 프레임에 무엇이 골라지는지 먼저 본다
+        seg.selected_id = None
+        free = seg.get_capture_mask()
+        free_oid = seg.current_result.get("capture_object_id") if free is not None else None
+        if locked is None:
+            if free_oid is not None:
+                seg.selected_id = free_oid
+                print(f"[Target] 캡처 대상 고정: id {free_oid}", flush=True)
+            return free
+        matched = bool((seg.current_result.get("detections") or {}).get("target_matches"))
+        locked_mask = seg.current_masks.get(locked)
+        if (matched and locked_mask is not None and np.any(locked_mask)
+                and free_oid is not None and free_oid != locked):
+            seg.selected_id = free_oid
+            self.missed = 0
+            print(f"[Target] 손이 다른 물체를 잡음: id {locked} -> {free_oid}", flush=True)
+            return free
+        seg.selected_id = locked
+        mask = seg.get_capture_mask()
+        if mask is not None:
+            self.missed = 0
+            return mask
+        self.missed += 1
+        if self.missed >= TARGET_LOST_FRAMES:
+            seg.selected_id = None
+            self.missed = 0
+            print(f"[Target] id {locked} 가 사라져 고정을 풂", flush=True)
+        return None
+
+    def release(self):
+        self.seg.selected_id = None
+        self.missed = 0
+
+
 def assembly_label(units):
     """직전 두 유닛을 이어 붙인 이름. 유닛이 하나뿐이면 조립할 게 없다."""
     if len(units) < 2:
@@ -216,6 +274,7 @@ def main():
     print("\n[Init] segmentor...")
     hosegmentor = (build_interactive_hotrack_segmentor_from_env()
                    if flag_interactive_hotrack else HOSegmentor())
+    target = CaptureTarget(hosegmentor) if flag_interactive_hotrack else None
     meshrecon = MeshReconstructor() if flag_recon_mesh else None
     if meshrecon is not None:
         print("[Init] MeshReconstructor ready")
@@ -280,7 +339,7 @@ def main():
                                                       is_first_call, frame_idx)
                     is_first_call = False
             frame_idx += 1
-            obj_mask = (hosegmentor.get_capture_mask() if flag_interactive_hotrack
+            obj_mask = (target.mask() if flag_interactive_hotrack
                         else result_masks[0] if len(result_masks) else None)
             if obj_mask is None:
                 continue
@@ -299,6 +358,8 @@ def main():
                 save_capture(cap, color, depth_m, K, obj_mask)
                 print(f"\n[Unit {name}] captured -> {cap}"
                       + ("  (depth 없음: 메시는 만들지만 정합에는 못 쓴다)" if depth_m is None else ""))
+                if target is not None:
+                    target.release()      # 다음 유닛은 다른 물체를 들고 찍는다
 
                 if meshrecon is None:
                     units.append(name)
@@ -330,6 +391,8 @@ def main():
                 members = units[-2:]
                 cap = session_dir / f"part_{name}"
                 save_capture(cap, color, depth_m, K, obj_mask)
+                if target is not None:
+                    target.release()
                 assemblies = [(c, m) for c, m in assemblies if c != name]
                 assemblies.append((name, members))
                 print(f"\n[Assembly {name}] captured (units {members}) -> {cap}"

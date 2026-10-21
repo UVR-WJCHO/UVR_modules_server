@@ -1,5 +1,7 @@
 import os
-os.environ.setdefault('ATTN_BACKEND', 'xformers')  # Can be 'flash-attn' or 'xformers'.
+os.environ.setdefault('ATTN_BACKEND', 'flash_attn')  # 'flash_attn' or 'xformers'. uvr_integ 의 xformers 0.0.30 은
+                                                     # flash-attn 2.8.3 과 import 단계에서 충돌한다. Windows 처럼
+                                                     # flash-attn 이 없는 환경은 ATTN_BACKEND=xformers 로 덮어쓴다.
 os.environ.setdefault('SPCONV_ALGO', 'native')     # Can be 'native' or 'auto', default is 'auto'.
                                             # 'auto' is faster but will do benchmarking at the beginning.
                                             # Recommended to set to 'native' if run only once.

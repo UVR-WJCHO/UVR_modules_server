@@ -18,12 +18,19 @@ DATA_REPLY)을 사용하며, hl2_data_pb2(HL2SensorPacket)로 depth 및 확장 �
     python hl2_receiver.py --no-gui        # 콘솔 통계만 (SSH/headless)
     python hl2_receiver.py --save out_dir  # 프레임을 이미지로 저장하며 확인
     python hl2_receiver.py --host <IP>     # 허브가 다른 PC에 있을 때
+
+사용자 상태 추정(modules/modules_HQS.py):
+    python main_all_hl2_receiver.py --hqs                         # 상태·요소를 RGB 창에 표시
+    python main_all_hl2_receiver.py --hqs --start-posture standing
+    python main_all_hl2_receiver.py --record output/hqs/s1.hl2rec # 원본 패킷 녹화
+    python modules/modules_HQS.py --replay output/hqs/s1.hl2rec --gui   # 녹화본 재생
 """
 
 import argparse
 import os
 import sys
 import threading
+import time
 from queue import Queue
 
 import cv2
@@ -32,6 +39,7 @@ import zmq
 
 # hl2_data_pb2 는 _comm/ 아래에 있음 (main_handtrack.py 의 modules/ 패턴과 동일)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "_comm"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "modules"))
 import hl2_data_pb2 as proto
 
 DEFAULT_IDENTITY = b"HL2_DEPTH_RECEIVER"
@@ -250,20 +258,37 @@ def render_overlay(pkt, rgb, depth):
     return vis
 
 
-def consumer_loop(args):
+def consumer_loop(args, hqs=None, rec=None):
     frame_id = 0
+    if hqs is not None:
+        from modules_HQS import draw as hqs_draw
+    if rec is not None:
+        from modules_HQS import REC_HEADER
     while True:
         _, _kw, _src, _fid, data = task_queue.get()
+        if rec is not None:
+            rec.write(REC_HEADER.pack(time.time(), len(data)) + data)
+            rec.flush()
         pkt = proto.HL2SensorPacket()
         pkt.ParseFromString(data)
 
         rgb = decode_rgb(pkt.image_data)
         depth = decode_depth(pkt.depth_data)
-        print(f"[#{frame_id}] " + summarize(pkt, rgb, depth), flush=True)
+        r = None
+        if hqs is not None:
+            h, w = rgb.shape[:2] if rgb is not None else (pkt.depth_height or 360, pkt.depth_width or 640)
+            c2w, _ = pose_from_packet(pkt)
+            r = hqs.update(pkt, rgb, intrinsics(pkt, w, h), c2w, depth)
+            for e in r.events:
+                print(f"[HQS] t={r.t:.2f} {e}", flush=True)
+        print(f"[#{frame_id}] " + summarize(pkt, rgb, depth)
+              + (f"  hqs={r.state}" if r is not None else ""), flush=True)
 
         vis = None
         if not args.no_gui and rgb is not None:
             vis = render_overlay(pkt, rgb, depth)
+            if r is not None:
+                hqs_draw(vis, r)
             cv2.imshow("hl2_rgb", vis)
             cv2.waitKey(1)
 
@@ -290,7 +315,16 @@ def run(args):
     sock.send_multipart([b"", b"RECV_REG", keyword, identity, b"ALL"])
     print(f"{identity.decode()} :: connected tcp://{args.host}:{args.port}, kw={keyword.decode()}", flush=True)
 
-    threading.Thread(target=consumer_loop, args=(args,), daemon=True).start()
+    hqs = rec = None
+    if args.hqs:
+        from modules_HQS import HQS
+        hqs = HQS(project_points, start_posture=args.start_posture)
+        print(f"[HQS] ready (start_posture={args.start_posture})", flush=True)
+    if args.record:
+        os.makedirs(os.path.dirname(os.path.abspath(args.record)), exist_ok=True)
+        rec = open(args.record, "ab")
+        print(f"[REC] {args.record}", flush=True)
+    threading.Thread(target=consumer_loop, args=(args, hqs, rec), daemon=True).start()
 
     while True:
         msg = sock.recv_multipart()
@@ -310,6 +344,11 @@ if __name__ == "__main__":
     ap.add_argument("--identity", default=DEFAULT_IDENTITY.decode())
     ap.add_argument("--no-gui", action="store_true", help="창 없이 콘솔 통계만")
     ap.add_argument("--save", default=None, help="프레임 저장 디렉토리")
+    ap.add_argument("--hqs", action="store_true", help="사용자 상태 추정(modules_HQS)을 켠다")
+    ap.add_argument("--start-posture", default="seated", choices=("seated", "standing"),
+                    help="HQS: 시작할 때 자세. 머리 높이가 상대값이라 필요하다")
+    ap.add_argument("--record", default=None,
+                    help="원본 HL2DATA 패킷을 이 파일에 이어 쓴다. modules_HQS.py --replay 로 재생")
     args = ap.parse_args()
     try:
         run(args)

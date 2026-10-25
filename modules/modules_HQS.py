@@ -13,9 +13,10 @@
                           비어 온다) HL2_AUDIO 청크를 webrtcvad 로 20 ms 씩 판정한다
   ② 변화점 BOCPD(Bayesian online change-point detection)로 요소 흐름이 바뀌는 순간을 잡는다.
            상태 정의와 무관하므로 정의하지 않은 상황으로 넘어가도 변화는 잡힌다.
-  ③ 상태   요소의 조합으로 선언한다(STATES). 변화점 사이 구간의 평균 소속도로 판정하므로
-           프레임 단위로 들락거리지 않는다. 상태 이름이 곧 HL2 에 보내는 모드이고, 어디에도
-           들지 않으면 NONE 이다. 새 상태는 STATES 에 한 줄 더한다.
+  ③ 상태   요소의 조합으로 선언한다(STATES). 들어갈 때는 순간 조건이 정해진 시간 동안 끊기지
+           않아야 하고, 머무는 동안은 변화점 이후 구간 평균도 보므로 잠깐 조건이 깨져도 들락거리지
+           않는다. 상태 이름이 곧 HL2 에 보내는 모드이고, 어디에도 들지 않으면 NONE 이다.
+           새 상태는 STATES 에 한 줄 더한다.
 
 좌표계는 HL2DATA 그대로다(Unity 월드, +Y 위, m). 얼굴 거리는 depth 가 있으면 depth 로, 없으면
 얼굴 폭으로 잰다. 내부 파라미터는 수신기의 intrinsics() 가 RGB 해상도로 맞춰 준다.
@@ -62,16 +63,18 @@ CP_CONFIRM_S = 1.0        # 가장 그럴듯한 run length 가 이만큼 이상 
 # --- ③ 상태 ---------------------------------------------------------------------------
 # 요소 이름 -> 원하는 값(1 이면 높아야, 0 이면 낮아야). 조건들의 최솟값(퍼지 AND)이 점수다.
 # 앞에 둔 상태가 우선이다(general=True 면 순서를 보지 않고 점수로 고른다). FOCUS 는 목소리가 없어야 한다.
-# 얼굴이 안 보이는 채로 말하거나 대화가 막 끝났을 때 FOCUS 로 넘어가지 않게 한다
+# 얼굴이 안 보이는 채로 말하거나 대화가 막 끝났을 때 FOCUS 로 넘어가지 않게 한다.
+# MOVING 은 일어난 순간부터다(서서 가만히 있어도 MOVING). 서서 마주 보고 말하면 앞에 둔 TALKING 이 된다
 STATES: Dict[str, Dict[str, int]] = {
     "TALKING": {"face": 1, "voice": 1, "walking": 0},
-    "MOVING":  {"walking": 1, "seated": 0},
+    "MOVING":  {"seated": 0},
     "FOCUS":   {"seated": 1, "walking": 0, "head_still": 1, "voice": 0},
 }
-STATE_HOLD_S = {"FOCUS": 5.0}   # 이 시간 동안 조건이 이어져야 들어간다
+STATE_HOLD_S = {"FOCUS": 5.0}   # 순간 조건이 이만큼 끊기지 않아야 들어간다. 없는 상태는 ENTER_HOLD_S
+ENTER_HOLD_S = 0.5
 NONE_STATE = "NONE"
 STATE_MIN_SCORE = 0.5     # 이보다 낮으면 그 상태가 아니다
-STATE_MIN_AGE_S = 1.0     # 새 구간이 이만큼 지나야 상태를 바꾼다
+STATE_MIN_AGE_S = 1.0     # 구간이 이보다 짧으면 평균을 믿기 일러 지금 상태를 그대로 둔다
 # 상태 전환에서 생기는 이벤트. ("이전", "다음") -> 이름. "*" 는 아무 상태.
 TRANSITION_EVENTS = {("TALKING", "*"): "parted"}
 
@@ -235,19 +238,26 @@ class HQS:
 
     # ---------------------------------------------------------------- ③ 상태 고르기
     def _qualified(self, scores: Dict[str, float], t: float) -> List[str]:
-        """구간 평균 점수가 기준을 넘고, 지속 시간이 정해진 상태는 그만큼 끊기지 않은 상태들."""
-        return [s for s in STATES if scores[s] >= STATE_MIN_SCORE and (
-                s == self.state or t - self.held_since.get(s, t) >= STATE_HOLD_S.get(s, 0.0))]
+        """성립하는 상태들. 새 상태는 순간 조건이 지속 시간만큼 끊기지 않아야 들어온다. 지금 상태는
+        순간 조건이 이어지거나 구간 평균(scores)이 기준 이상이면 머문다.
 
-    def _select_ordered(self, scores: Dict[str, float], t: float) -> str:
+        들어갈 때 구간 평균을 기다리면, 변화점이 실제 변화보다 앞에 잡혔을 때(일어선 뒤 잠시 서 있다
+        걷는 경우 등) 그 앞부분이 평균을 끌어내려 몇 초씩 늦는다.
+        """
+        young = t - self.seg_start < STATE_MIN_AGE_S
+        return [s for s in STATES if (
+            (s in self.held_since or scores[s] >= STATE_MIN_SCORE or young) if s == self.state
+            else s in self.held_since and t - self.held_since[s] >= STATE_HOLD_S.get(s, ENTER_HOLD_S))]
+
+    def _select_ordered(self, scores: Dict[str, float], inst: Dict[str, float], t: float) -> str:
         """STATES 에 적은 순서가 우선순위다. 성립하는 첫 상태."""
         q = self._qualified(scores, t)
         return q[0] if q else NONE_STATE
 
-    def _select_general(self, scores: Dict[str, float], t: float) -> str:
-        """순서를 보지 않는다. 성립하는 상태 중 구간 평균 점수가 가장 높은 것."""
+    def _select_general(self, scores: Dict[str, float], inst: Dict[str, float], t: float) -> str:
+        """순서를 보지 않는다. 성립하는 상태 중 점수(구간 평균과 순간 중 큰 쪽)가 가장 높은 것."""
         q = self._qualified(scores, t)
-        return max(q, key=scores.get) if q else NONE_STATE
+        return max(q, key=lambda s: max(scores[s], inst[s])) if q else NONE_STATE
 
     # ---------------------------------------------------------------- 오디오
     def update_audio(self, pcm: bytes, sample_rate: int, t_start: float, channels: int = 1) -> None:
@@ -336,15 +346,15 @@ class HQS:
         mean = dict(zip(PRIMITIVES, self.seg_sum / max(1, self.seg_n)))
         score = lambda v: {s: min(v[p] if want else 1.0 - v[p] for p, want in cond.items())
                            for s, cond in STATES.items()}
-        scores = score(mean)
-        for s, v in score(prim).items():
+        scores, inst = score(mean), score(prim)
+        for s, v in inst.items():
             if v < STATE_MIN_SCORE:
                 self.held_since.pop(s, None)
             else:
                 self.held_since.setdefault(s, t)
-        label = self._select(scores, t)
+        label = self._select(scores, inst, t)
         events: List[str] = []
-        if label != self.state and t - self.seg_start >= STATE_MIN_AGE_S:
+        if label != self.state:
             for (a_, b_), name in TRANSITION_EVENTS.items():
                 if a_ in (self.state, "*") and b_ in (label, "*") and self.state != label:
                     events.append(name)

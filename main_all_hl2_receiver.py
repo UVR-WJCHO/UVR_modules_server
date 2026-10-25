@@ -53,6 +53,7 @@ DEFAULT_KEYWORD = b"HL2DATA"
 # depth 컬러맵 고정 범위(가까움=파랑, 멀음=빨강). 프레임 간 비교가 쉽도록 고정.
 DEPTH_MIN_MM = 200.0
 DEPTH_MAX_MM = 4000.0
+SHOW_DEPTH_WINDOWS = False   # hl2_depth / hl2_depth_overlay 창. 요약 문자열은 그대로 낸다
 # 시선 광선 근/원점(m)
 GAZE_NEAR = 0.5
 GAZE_FAR = 2.0
@@ -178,19 +179,20 @@ def show_aligned_depth(img, depth):
     if depth is None:
         return None
     valid = depth > 0
-    # 고정 범위 컬러맵: 가까움=파랑, 멀음=빨강 (0.2~4m)
-    norm = np.clip((depth.astype(np.float32) - DEPTH_MIN_MM) / (DEPTH_MAX_MM - DEPTH_MIN_MM), 0, 1)
-    cm = cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_JET)
-    cm[~valid] = 0
-    cm = cv2.dilate(cm, np.ones((3, 3), np.uint8))   # 성긴 점 키우기
-    cv2.imshow("hl2_depth", cm)
-    # 유효 픽셀만 이미지에 겹쳐서 정렬 확인
-    if cm.shape[:2] == img.shape[:2]:
-        vm = cv2.dilate(valid.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
-        ov = img.copy()
-        blend = cv2.addWeighted(img, 0.35, cm, 0.65, 0)
-        ov[vm] = blend[vm]
-        cv2.imshow("hl2_depth_overlay", ov)
+    if SHOW_DEPTH_WINDOWS:
+        # 고정 범위 컬러맵: 가까움=파랑, 멀음=빨강 (0.2~4m)
+        norm = np.clip((depth.astype(np.float32) - DEPTH_MIN_MM) / (DEPTH_MAX_MM - DEPTH_MIN_MM), 0, 1)
+        cm = cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_JET)
+        cm[~valid] = 0
+        cm = cv2.dilate(cm, np.ones((3, 3), np.uint8))   # 성긴 점 키우기
+        cv2.imshow("hl2_depth", cm)
+        # 유효 픽셀만 이미지에 겹쳐서 정렬 확인
+        if cm.shape[:2] == img.shape[:2]:
+            vm = cv2.dilate(valid.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+            ov = img.copy()
+            blend = cv2.addWeighted(img, 0.35, cm, 0.65, 0)
+            ov[vm] = blend[vm]
+            cv2.imshow("hl2_depth_overlay", ov)
     n = int(valid.sum())
     H, W = depth.shape[:2]
     cov = 100.0 * n / (H * W)

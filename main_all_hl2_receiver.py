@@ -21,8 +21,13 @@ DATA_REPLY)을 사용하며, hl2_data_pb2(HL2SensorPacket)로 depth 및 확장 �
 
 사용자 상태 추정(modules/modules_HQS.py):
     python main_all_hl2_receiver.py --hqs                         # 상태·요소를 RGB 창에 표시
+    --hqs 는 상태를 HL2_MODE(FOCUS / MOVING / TALKING / NONE 문자열)로 1 초마다 올린다.
     python main_all_hl2_receiver.py --hqs --start-posture standing
-    python main_all_hl2_receiver.py --record output/hqs/s1.hl2rec # 원본 패킷 녹화
+    python main_all_hl2_receiver.py --hqs --general               # 상태 우선순위 없이 점수로 고른다
+    python main_all_hl2_receiver.py --record output/hqs/s1.hl2rec # 원본 패킷 녹화 (+ s1.hl2rec.audio)
+    --hqs 는 목소리 판정을 위해 HL2_CONTROL 로 마이크(HL2_AUDIO)를 요청한다. --no-voice 로 끈다.
+    HL2_CONTROL 은 켤 스트림 전체를 한 번에 정하므로, 레이어를 요청하는 main_adaptiveMM 과 동시에
+    돌리면 서로의 요청을 덮어쓴다.
     python modules/modules_HQS.py --replay output/hqs/s1.hl2rec --gui   # 녹화본 재생
 """
 
@@ -95,12 +100,22 @@ def pose_from_packet(pk):
 
 
 def intrinsics(pk, w, h):
-    """패킷 intrinsics. 0 이면 화면크기 기반 대략값."""
+    """패킷 intrinsics 를 RGB(w x h) 해상도로 맞춘다. 0 이면 화면크기 기반 대략값.
+
+    intrinsics 가 RGB 가 아니라 depth 격자 해상도로 올 때가 있다(RGB 640x360, depth·K 448x252).
+    그대로 쓰면 투영이 주점 쪽으로 쏠린다. 주점이 어느 해상도의 중심에 더 가까운지로 K 가
+    정의된 해상도를 고르고, RGB 크기로 비례 조정한다.
+    """
     fx, fy, cx, cy = pk.fx, pk.fy, pk.cx, pk.cy
     if fx <= 1 or fy <= 1:
         fx = fy = 0.8 * w
         cx, cy = w / 2.0, h / 2.0
-    return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], np.float32)
+    cands = [(w, h)]
+    if pk.depth_width > 0 and pk.depth_height > 0:
+        cands.append((pk.depth_width, pk.depth_height))
+    nw, nh = min(cands, key=lambda s: abs(cx - s[0] / 2.0) + abs(cy - s[1] / 2.0))
+    sx, sy = w / float(nw), h / float(nh)
+    return np.array([[fx * sx, 0, cx * sx], [0, fy * sy, cy * sy], [0, 0, 1]], np.float32)
 
 
 def project_points(K, cam_to_world, P, flip_y=True, forward_neg_z=True):
@@ -277,8 +292,7 @@ def consumer_loop(args, hqs=None, rec=None):
         r = None
         if hqs is not None:
             h, w = rgb.shape[:2] if rgb is not None else (pkt.depth_height or 360, pkt.depth_width or 640)
-            c2w, _ = pose_from_packet(pkt)
-            r = hqs.update(pkt, rgb, intrinsics(pkt, w, h), c2w, depth)
+            r = hqs.update(pkt, rgb, intrinsics(pkt, w, h), depth)
             for e in r.events:
                 print(f"[HQS] t={r.t:.2f} {e}", flush=True)
         print(f"[#{frame_id}] " + summarize(pkt, rgb, depth)
@@ -302,6 +316,58 @@ def consumer_loop(args, hqs=None, rec=None):
         frame_id += 1
 
 
+AUDIO_CONTROL_PERIOD_S = 5.0   # 기기는 15 s 동안 제어를 못 받으면 마이크를 놓는다(HL2_CONTROL 규약)
+
+
+def audio_loop(hub, hqs, rec_audio):
+    """HL2_AUDIO 를 받아 HQS 의 목소리 판정에 넣고, 녹화 중이면 그대로 남긴다."""
+    import hl2_sensors_pb2 as sensproto
+    from modules_HQS import REC_HEADER
+    n, t_ctrl = 0, 0.0
+    while True:
+        if time.time() - t_ctrl >= AUDIO_CONTROL_PERIOD_S:   # 끊기지 않게 주기적으로 다시 요청한다
+            hub.send(sensproto.HL2Control(send_audio=True).SerializeToString())
+            t_ctrl = time.time()
+        data = hub.get_latest(timeout=0.5)
+        if data is None:
+            continue
+        if rec_audio is not None:
+            rec_audio.write(REC_HEADER.pack(time.time(), len(data)) + data)
+            rec_audio.flush()
+        a = sensproto.HL2Audio()
+        a.ParseFromString(data)
+        if a.is_aac or not a.audio:
+            continue
+        hqs.update_audio(a.audio, a.sample_rate, a.start_timestamp / 1e9, max(1, a.channels))
+        n += 1
+        if n == 1:
+            print(f"[HQS] 오디오 수신 시작 ({a.sample_rate} Hz, {a.channels} ch)", flush=True)
+
+
+MODE_PERIOD_S = 1.0   # HL2_MODE 를 보내는 주기
+MODE_REPEAT_S = 5.0   # 같은 모드가 이어지면 이 간격으로만 다시 보낸다. 그 사이는 NONE
+
+
+def mode_loop(hub, hqs):
+    """HQS 상태를 HL2_MODE 로 1 초마다 보낸다. 상태가 바뀐 순간 그 모드를 보내고, 이어지는 동안은
+    MODE_REPEAT_S 마다 다시 보낸다. 나머지 틱과 어느 상태에도 들지 않을 때는 NONE 이다."""
+    from modules_HQS import NONE_STATE
+    every = round(MODE_REPEAT_S / MODE_PERIOD_S)
+    prev, ticks = NONE_STATE, every
+    while True:
+        cur = hqs.state
+        ticks += 1
+        if cur != NONE_STATE and (cur != prev or ticks >= every):
+            out, ticks = cur, 0
+        else:
+            out = NONE_STATE
+        prev = cur
+        hub.send(out.encode())
+        if out != NONE_STATE:
+            print(f"[HQS] HL2_MODE {out}", flush=True)
+        time.sleep(MODE_PERIOD_S)
+
+
 def run(args):
     identity = args.identity.encode()
     keyword = args.keyword.encode()
@@ -318,22 +384,45 @@ def run(args):
     hqs = rec = None
     if args.hqs:
         from modules_HQS import HQS
-        hqs = HQS(project_points, start_posture=args.start_posture)
-        print(f"[HQS] ready (start_posture={args.start_posture})", flush=True)
+        hqs = HQS(start_posture=args.start_posture, general=args.general)
+        print(f"[HQS] ready (start_posture={args.start_posture}, general={args.general})", flush=True)
     if args.record:
         os.makedirs(os.path.dirname(os.path.abspath(args.record)), exist_ok=True)
         rec = open(args.record, "ab")
         print(f"[REC] {args.record}", flush=True)
     threading.Thread(target=consumer_loop, args=(args, hqs, rec), daemon=True).start()
 
-    while True:
-        msg = sock.recv_multipart()
-        if msg[1] == b"NOTIFY":
-            _, _, kw, src, fid = msg
-            sock.send_multipart([b"", b"DOWNLOAD", kw, src, fid])
-        elif msg[1] == b"DATA_REPLY":
-            _, _, kw, src, fid, data = msg
-            task_queue.put((None, kw, src, fid, data))
+    audio_hub = mode_hub = None
+    if hqs is not None:
+        from hub_client import HubClient, KW_HL2_MODE
+        mode_hub = HubClient(args.host, args.port, recv_kw=None, result_kw=KW_HL2_MODE,
+                             identity=identity + b"_MODE")
+        threading.Thread(target=mode_loop, args=(mode_hub, hqs), daemon=True).start()
+    if hqs is not None and not args.no_voice:
+        from hub_client import HubClient, KW_HL2_AUDIO, KW_HL2_CONTROL
+        # 오디오는 연속 스트림이라 버리면 안 된다. 수신 등록은 identity 마다 하나라 따로 둔다
+        audio_hub = HubClient(args.host, args.port, recv_kw=KW_HL2_AUDIO, result_kw=KW_HL2_CONTROL,
+                              identity=identity + b"_AUDIO", queue_size=256)
+        rec_audio = open(args.record + ".audio", "ab") if args.record else None
+        threading.Thread(target=audio_loop, args=(audio_hub, hqs, rec_audio), daemon=True).start()
+
+    try:
+        while True:
+            msg = sock.recv_multipart()
+            if msg[1] == b"NOTIFY":
+                _, _, kw, src, fid = msg
+                sock.send_multipart([b"", b"DOWNLOAD", kw, src, fid])
+            elif msg[1] == b"DATA_REPLY":
+                _, _, kw, src, fid, data = msg
+                task_queue.put((None, kw, src, fid, data))
+    finally:
+        if audio_hub is not None:                            # 끝날 때 마이크를 바로 놓게 한다
+            import hl2_sensors_pb2 as sensproto
+            audio_hub.send(sensproto.HL2Control(send_audio=False).SerializeToString())
+            time.sleep(0.2)
+            audio_hub.close()
+        if mode_hub is not None:
+            mode_hub.close()
 
 
 if __name__ == "__main__":
@@ -347,8 +436,12 @@ if __name__ == "__main__":
     ap.add_argument("--hqs", action="store_true", help="사용자 상태 추정(modules_HQS)을 켠다")
     ap.add_argument("--start-posture", default="seated", choices=("seated", "standing"),
                     help="HQS: 시작할 때 자세. 머리 높이가 상대값이라 필요하다")
+    ap.add_argument("--general", action="store_true",
+                    help="HQS: 상태 우선순위(STATES 순서) 대신 성립하는 상태 중 점수가 가장 높은 것을 고른다")
     ap.add_argument("--record", default=None,
-                    help="원본 HL2DATA 패킷을 이 파일에 이어 쓴다. modules_HQS.py --replay 로 재생")
+                    help="원본 HL2DATA 패킷을 이 파일에 이어 쓴다(오디오는 <파일>.audio). modules_HQS.py --replay 로 재생")
+    ap.add_argument("--no-voice", action="store_true",
+                    help="HQS: 마이크를 요청하지 않는다. voice 요소는 0 이 된다")
     args = ap.parse_args()
     try:
         run(args)

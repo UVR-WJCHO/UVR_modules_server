@@ -42,7 +42,7 @@
 |---|---|---|---|
 | `yolo_100doh_best.pt` | 20 MB | HoTrack 손-객체 검출 | [modules_hotrack.py:106](modules/modules_hotrack.py#L106) (`InteractiveHoTrackSegmentor`) |
 | `yolo11m.pt` | 39 MB | 객체 검출 `ObjTracker` | [modules_obj.py:16](modules/modules_obj.py#L16) (→ `main_handtrack.py`) |
-| `yolo11n.pt` | 5.4 MB | 사용자 상태 추정의 화면(tv, laptop) 검출 (COCO 원본 가중치) | [modules_HQS.py](modules/modules_HQS.py) `HQS` (→ `main_all_hl2_receiver.py --hqs`) |
+| `yolo11n.pt` | 5.4 MB | (현재 미사용) | — |
 
 > 출처: Ultralytics YOLO11 (`yolo11m.pt`, `yolo11n.pt`). `yolo_100doh_best.pt`는 100DOH 기반 커스텀 학습본.
 
@@ -132,7 +132,7 @@
 |---|---|---|
 | `face_detection_yunet_2023mar.onnx` | 227 KB | 얼굴 검출 + 5점 랜드마크 (OpenCV `FaceDetectorYN`) |
 
-> 출처: OpenCV Zoo `models/face_detection_yunet` (MIT). 화면 검출은 위 2절의 `yolo11n.pt`(COCO)를 그대로 쓴다.
+> 출처: OpenCV Zoo `models/face_detection_yunet` (MIT).
 > 학습한 가중치가 아니라 공용 사전학습 검출기다.
 
 ---

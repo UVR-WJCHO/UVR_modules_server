@@ -22,6 +22,7 @@ DATA_REPLY)을 사용하며, hl2_data_pb2(HL2SensorPacket)로 depth 및 확장 �
 사용자 상태 추정(modules/modules_HQS.py):
     python main_all_hl2_receiver.py --hqs                         # 상태·요소를 RGB 창에 표시
     --hqs 는 상태를 HL2_MODE(FOCUS / MOVING / TALKING / NONE 문자열)로 1 초마다 올린다.
+    또 WATCH_HR / WATCH_ACTIVITY / WATCH_VAD 를 받아 HQS 패널 값(JSON)을 HL2_UI 로 올린다.
     python main_all_hl2_receiver.py --hqs --start-posture standing
     python main_all_hl2_receiver.py --hqs --general               # 상태 우선순위 없이 점수로 고른다
     python main_all_hl2_receiver.py --record output/hqs/s1.hl2rec # 원본 패킷 녹화 (+ s1.hl2rec.audio)
@@ -32,6 +33,7 @@ DATA_REPLY)을 사용하며, hl2_data_pb2(HL2SensorPacket)로 depth 및 확장 �
 """
 
 import argparse
+import json
 import os
 import sys
 import threading
@@ -275,7 +277,7 @@ def render_overlay(pkt, rgb, depth):
     return vis
 
 
-def consumer_loop(args, hqs=None, rec=None):
+def consumer_loop(args, hqs=None, rec=None, panel=None, ui=None):
     frame_id = 0
     if hqs is not None:
         from modules_HQS import draw as hqs_draw
@@ -297,6 +299,8 @@ def consumer_loop(args, hqs=None, rec=None):
             r = hqs.update(pkt, rgb, intrinsics(pkt, w, h), depth)
             for e in r.events:
                 print(f"[HQS] t={r.t:.2f} {e}", flush=True)
+            for ev in panel.on_hqs(r):
+                ui.send(ev)
         print(f"[#{frame_id}] " + summarize(pkt, rgb, depth)
               + (f"  hqs={r.state}" if r is not None else ""), flush=True)
 
@@ -370,6 +374,34 @@ def mode_loop(hub, hqs):
         time.sleep(MODE_PERIOD_S)
 
 
+class UiSender:
+    """HQS 패널 이벤트를 HL2_UI 로 올린다. 수신 스레드 여럿이 함께 쓰므로 소켓 하나를 잠가서 쓴다."""
+
+    def __init__(self, hub):
+        self.hub = hub
+        self.lock = threading.Lock()
+
+    def send(self, ev):
+        with self.lock:
+            self.hub.send(json.dumps(ev, separators=(",", ":")).encode())
+        print(f"[HQS] HL2_UI {ev['type']}={ev['value']} ({ev['source']})", flush=True)
+
+
+def watch_loop(hub, kind, panel, ui):
+    """와치 채널 하나(WATCH_HR / WATCH_ACTIVITY / WATCH_VAD)를 받아 패널 이벤트로 바꿔 올린다."""
+    while True:
+        data = hub.get_latest(timeout=1.0)
+        if data is None:
+            continue
+        try:
+            ev = panel.on_watch(kind, json.loads(data))
+        except (ValueError, TypeError, AttributeError) as e:      # 깨진 메시지 하나로 채널을 멈추지 않는다
+            print(f"[HQS] {kind} 메시지 무시: {e}", flush=True)
+            continue
+        if ev is not None:
+            ui.send(ev)
+
+
 def run(args):
     identity = args.identity.encode()
     keyword = args.keyword.encode()
@@ -383,23 +415,34 @@ def run(args):
     sock.send_multipart([b"", b"RECV_REG", keyword, identity, b"ALL"])
     print(f"{identity.decode()} :: connected tcp://{args.host}:{args.port}, kw={keyword.decode()}", flush=True)
 
-    hqs = rec = None
+    hqs = rec = panel = ui = None
+    hubs = []
     if args.hqs:
-        from modules_HQS import HQS
+        from modules_HQS import HQS, HQSPanel
+        from hub_client import HubClient, KW_HL2_MODE, KW_HL2_UI, KW_WATCH_HR, KW_WATCH_ACTIVITY, KW_WATCH_VAD
         hqs = HQS(start_posture=args.start_posture, general=args.general)
+        panel = HQSPanel()
+        ui_hub = HubClient(args.host, args.port, recv_kw=None, result_kw=KW_HL2_UI, identity=identity + b"_UI")
+        ui = UiSender(ui_hub)
+        hubs.append(ui_hub)
         print(f"[HQS] ready (start_posture={args.start_posture}, general={args.general})", flush=True)
     if args.record:
         os.makedirs(os.path.dirname(os.path.abspath(args.record)), exist_ok=True)
         rec = open(args.record, "ab")
         print(f"[REC] {args.record}", flush=True)
-    threading.Thread(target=consumer_loop, args=(args, hqs, rec), daemon=True).start()
+    threading.Thread(target=consumer_loop, args=(args, hqs, rec, panel, ui), daemon=True).start()
 
-    audio_hub = mode_hub = None
+    audio_hub = None
     if hqs is not None:
-        from hub_client import HubClient, KW_HL2_MODE
         mode_hub = HubClient(args.host, args.port, recv_kw=None, result_kw=KW_HL2_MODE,
                              identity=identity + b"_MODE")
+        hubs.append(mode_hub)
         threading.Thread(target=mode_loop, args=(mode_hub, hqs), daemon=True).start()
+        # 수신 등록은 identity 마다 하나이고 HubClient 는 keyword 를 구분해 주지 않아 채널마다 따로 둔다
+        for kw, kind in ((KW_WATCH_HR, "hr"), (KW_WATCH_ACTIVITY, "activity"), (KW_WATCH_VAD, "vad")):
+            hub = HubClient(args.host, args.port, recv_kw=kw, identity=identity + b"_" + kw, queue_size=32)
+            hubs.append(hub)
+            threading.Thread(target=watch_loop, args=(hub, kind, panel, ui), daemon=True).start()
     if hqs is not None and not args.no_voice:
         from hub_client import HubClient, KW_HL2_AUDIO, KW_HL2_CONTROL
         # 오디오는 연속 스트림이라 버리면 안 된다. 수신 등록은 identity 마다 하나라 따로 둔다
@@ -423,8 +466,8 @@ def run(args):
             audio_hub.send(sensproto.HL2Control(send_audio=False).SerializeToString())
             time.sleep(0.2)
             audio_hub.close()
-        if mode_hub is not None:
-            mode_hub.close()
+        for hub in hubs:
+            hub.close()
 
 
 if __name__ == "__main__":

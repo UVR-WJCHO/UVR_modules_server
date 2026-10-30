@@ -17,6 +17,8 @@
            않아야 하고, 머무는 동안은 변화점 이후 구간 평균도 보므로 잠깐 조건이 깨져도 들락거리지
            않는다. 상태 이름이 곧 HL2 에 보내는 모드이고, 어디에도 들지 않으면 NONE 이다.
            새 상태는 STATES 에 한 줄 더한다.
+  ④ 패널   HQS 패널의 차원 값(Emotional / Physical / Social / Digital, 0~1)을 낸다(HQSPanel).
+           와치 신호와 위의 face·voice 요소를 받아 값이 바뀔 때 이벤트를 하나 내고, 수신기가 HL2_UI 로 올린다.
 
 좌표계는 HL2DATA 그대로다(Unity 월드, +Y 위, m). 얼굴 거리는 depth 가 있으면 depth 로, 없으면
 얼굴 폭으로 잰다. 내부 파라미터는 수신기의 intrinsics() 가 RGB 해상도로 맞춰 준다.
@@ -29,6 +31,8 @@ from __future__ import annotations
 import math
 import os
 import struct
+import threading
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -170,7 +174,6 @@ class HQS:
         self.y_stand: Optional[float] = None
         self.face = 0.0
         # 오디오는 다른 스레드(수신기의 HL2_AUDIO 루프)에서 들어온다
-        import threading
         self._audio_lock = threading.Lock()
         self._vad = None
         self._vad_rate = 0
@@ -399,6 +402,81 @@ def draw(img: np.ndarray, r: HQSResult) -> None:
         cv2.rectangle(img, (x0 + 95, y - 10), (x0 + 95 + int(100 * v), y - 2), (0, 200, 0), -1)
         label = "voice(no mic)" if k == "voice" and not r.audio else k
         cv2.putText(img, label, (x0, y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
+
+# ------------------------------------------------------------------------ ④ 패널
+# 값 규칙은 패널 쪽에서 정한 것이다(docs/UI_CONVERTER_GUIDE.md). 이벤트 형식:
+#   {"type": "emotion"|"physical"|"social"|"digital", "source": ..., "value": 0~1, "timestamp": unix s}
+ACTIVITY_VALUE = {"STILL": 0.0, "WALKING": 0.5, "RUNNING": 1.0}
+WATCH_TIMEOUT_S = 5.0     # 와치 메시지(심박은 약 1 Hz)가 이만큼 끊기면 와치가 없다고 본다(bridge 미실행 포함)
+
+
+def _panel_event(kind: str, source: str, value: float) -> Dict:
+    return {"type": kind, "source": source, "value": float(value), "timestamp": round(time.time(), 3)}
+
+
+class HQSPanel:
+    """와치 메시지(on_watch)와 HQSResult(on_hqs)를 받아 패널 이벤트를 낸다. 여러 스레드에서 부른다.
+
+    Social = (얼굴 + 말소리) x 0.5. 얼굴은 HQS face 요소(대화 거리 안), 말소리는 와치 VAD 나
+    HQS voice(HL2 마이크) 중 하나라도 켜지면 있다고 본다. 프레임마다 내지 않고 값이 바뀔 때만 낸다.
+    와치가 없으면(WATCH_TIMEOUT_S) 와치 VAD 는 버리고, Physical 은 HQS walking 요소로 대신한다
+    (걷기 0.5 / 아니면 0.0, source "hqs"). Emotion 은 심박뿐이라 대신할 것이 없다.
+    Digital 은 아직 규칙이 없다.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._face = self._voice_hl2 = self._voice_watch = False
+        self._social: Optional[float] = None
+        self._t_watch = time.time()               # 시작 직후 WATCH_TIMEOUT_S 는 와치가 붙기를 기다린다
+        self._watch_ok = True
+        self._physical_hqs: Optional[float] = None
+
+    def on_watch(self, kind: str, msg: Dict) -> Optional[Dict]:
+        """kind: "hr" (WATCH_HR) / "activity" (WATCH_ACTIVITY) / "vad" (WATCH_VAD)."""
+        with self._lock:
+            self._t_watch = time.time()
+        if kind == "hr":
+            if msg.get("bpm") is None:
+                return None
+            bpm = float(msg["bpm"])
+            v = 0.0 if bpm < 60 else 0.4 if bpm <= 100 else 0.8 if bpm <= 130 else 1.0
+            return _panel_event("emotion", "heart_rate", v)
+        if kind == "activity":
+            v = ACTIVITY_VALUE.get(str(msg.get("state", "")).upper().strip())
+            return None if v is None else _panel_event("physical", "activity", v)
+        if kind == "vad" and "is_speaking" in msg:
+            with self._lock:
+                self._voice_watch = bool(msg["is_speaking"])
+                return self._social_event(watch_ok=True)
+        return None
+
+    def on_hqs(self, r: HQSResult) -> List[Dict]:
+        with self._lock:
+            ok = time.time() - self._t_watch < WATCH_TIMEOUT_S
+            if ok != self._watch_ok:
+                self._watch_ok, self._physical_hqs = ok, None   # 와치가 끊기면 HL2 값을 바로 한 번 보낸다
+                self._voice_watch = False                       # 끊기기 전 VAD 값은 돌아와도 믿을 수 없다
+                print("[HQS] 와치 수신 중" if ok else
+                      f"[HQS] 와치 데이터가 {WATCH_TIMEOUT_S:.0f} s 없다(main_devicebridge 확인). "
+                      "physical 은 HL2 머리 이동으로 대신하고 emotion 은 보내지 않는다", flush=True)
+            self._face = r.primitives["face"] >= STATE_MIN_SCORE
+            self._voice_hl2 = r.primitives["voice"] >= STATE_MIN_SCORE
+            events = [self._social_event(ok)]
+            if not ok:
+                v = 0.5 if r.primitives["walking"] >= STATE_MIN_SCORE else 0.0
+                if v != self._physical_hqs:
+                    self._physical_hqs = v
+                    events.append(_panel_event("physical", "hqs", v))
+            return [e for e in events if e is not None]
+
+    def _social_event(self, watch_ok: bool) -> Optional[Dict]:
+        v = 0.5 * (int(self._face) + int(self._voice_hl2 or (self._voice_watch and watch_ok)))
+        if v == self._social:
+            return None
+        self._social = v
+        return _panel_event("social", "combined", v)
 
 
 # ------------------------------------------------------------------------ 녹화 형식

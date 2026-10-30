@@ -4,6 +4,7 @@ A HoloLens2 / webcam driven server bundling several ML pipelines:
 
 - **Object mesh reconstruction** — hand–object segmentation (HoTrack + SAM2) → image-to-3D mesh (TRELLIS) → optional VLM-based material/affordance property estimation.
 - **Hand tracking & gesture recognition** — 3D hand pose (SARTE / WiLoR) + gesture classification, streamed back to the HoloLens2 over UDP.
+- **User state (HQS)** — FOCUS / MOVING / TALKING modes and HQS panel values from HL2 sensors and the Galaxy Watch, without learned models.
 
 All importable packages live under `modules/`; each entry point adds `modules/` to `sys.path` at startup, so internal packages (`meshrecon`, `segmentor`, `hotrack`, `handtracker`, …) resolve as top-level imports.
 
@@ -17,7 +18,7 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 ├── main_metaobjrecon.py       # Capture → reconstruct → align → metaobj (.glb + .json + teaser)
 ├── main_handtrack.py          # Hand tracking + gesture recognition
 ├── main_handtrack_forecast.py # Delay-compensated hand tracking (multi-horizon forecast)
-├── main_all_hl2_receiver.py   # HL2DATA viewer (RGB / depth / overlay)
+├── main_all_hl2_receiver.py   # HL2DATA viewer (RGB / depth / overlay); --hqs adds user state (HQS)
 ├── main_devicebridge.py       # Watch (WebSocket) and phone (TCP) → comm_hub bridge
 │
 ├── modules/
@@ -29,6 +30,7 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 │   ├── modules_obj.py         # ObjTracker               (YOLO object detection)
 │   ├── modules_hl2.py         # Hl2Manager               (HoloLens2 streaming via hl2ss)
 │   ├── modules_behavior.py    # BehaviorPropertyEstimator (GLB -> property JSON, no visualization)
+│   ├── modules_HQS.py         # HQS (user state) + HQSPanel (panel values)
 │   │
 │   ├── meshrecon/             # TRELLIS image-to-3D
 │   ├── meshalignment/         # mesh alignment
@@ -183,14 +185,56 @@ python main_handtrack_forecast.py      # terminal 2
 - Training and evaluation code for the forecaster lives in `modules/delay_nowcasting/`;
   its datasets and training runs are under `research_data/` (git-ignored).
 
-### 4. Viewing what HL2 sends (`main_all_hl2_receiver.py`)
+### 4. HL2 viewer and user state (`main_all_hl2_receiver.py`)
 
-Subscribes to `HL2DATA` and shows RGB, aligned depth, and the overlay used to check
-their registration. Read-only — it produces nothing.
+Without options the receiver subscribes to `HL2DATA` and shows RGB with the hand, gaze and
+depth overlay. In this mode it is read-only and publishes nothing.
 
 ```bash
 python main_all_hl2_receiver.py            # --no-gui for console only
 ```
+
+With `--hqs` it also runs the user-state module (`modules/modules_HQS.py`) and publishes two
+channels to the HoloLens2:
+
+- `HL2_MODE` — `FOCUS`, `MOVING`, `TALKING` or `NONE`, once per second.
+- `HL2_UI` — HQS panel values (emotion / physical / social) as JSON, sent when a value changes.
+
+To judge speech it requests the HL2 microphone over `HL2_CONTROL`. The wire format for the
+headset side is specified in [_comm/HQS_PROTOCOL.md](_comm/HQS_PROTOCOL.md).
+
+```bash
+conda activate uvr_integ
+python comm_hub.py --port 37001            # terminal 1
+python main_devicebridge.py                # terminal 2   (watch and phone; see below)
+python main_all_hl2_receiver.py --hqs      # terminal 3
+```
+
+| option | effect |
+|---|---|
+| `--start-posture standing` | the session starts standing (default `seated`); head height is relative, so the starting posture sets the reference |
+| `--record <file>` | appends raw `HL2DATA` packets to `<file>` and microphone chunks to `<file>.audio`; replay with `python modules/modules_HQS.py --replay <file>` |
+| `--no-voice` | does not request the microphone; `TALKING` is then never reported |
+| `--general` | selects the qualifying state with the highest score instead of the fixed priority order |
+
+`HL2_CONTROL` sets the complete stream state on the headset, so running `--hqs` together
+with `main_adaptiveMM.py` makes the two overwrite each other's requests.
+
+**Dependence on the device bridge.** The modes are computed from HoloLens2 data alone, but
+part of the panel and the phone link come from `main_devicebridge.py`:
+
+| output | without `main_devicebridge.py` | with `main_devicebridge.py` |
+|---|---|---|
+| `HL2_MODE` | complete | unchanged |
+| `HL2_UI` emotion | not sent | watch heart rate |
+| `HL2_UI` physical | substitute from HL2 head motion (`source: "hqs"`) | watch activity |
+| `HL2_UI` social | HL2 face and HL2 microphone | additionally the watch VAD |
+| phone ↔ HL2 (`PHONE_TO_HL2` / `HL2_TO_PHONE`) | unavailable | available |
+
+Run the bridge whenever the panel is expected to reflect watch data or the phone app is in
+use. Without it the receiver keeps running; after 5 s without watch messages it logs a
+warning and switches to the substitutes above, and it returns to the watch values once
+messages resume.
 
 ### 5. Device bridge — Galaxy Watch and phone (`main_devicebridge.py`)
 
@@ -201,7 +245,8 @@ over WebSocket; the bridge accepts it exactly as the original `server.py` did, r
 `WATCH_VAD`. The RoverHandoff phone app speaks length-prefixed JSON over TCP to what used
 to be the HoloLens; the bridge takes that role and relays frames as `PHONE_TO_HL2` /
 `HL2_TO_PHONE`. Point both apps' server IP at this PC; nothing else on them changes.
-Details in [modules/devicebridge/README.md](modules/devicebridge/README.md).
+Details in [modules/devicebridge/README.md](modules/devicebridge/README.md). The watch
+channels feed the HQS panel of entry point 4.
 
 ```bash
 python comm_hub.py --port 37001        # terminal 1

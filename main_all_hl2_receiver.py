@@ -25,6 +25,9 @@ DATA_REPLY)을 사용하며, hl2_data_pb2(HL2SensorPacket)로 depth 및 확장 �
     또 WATCH_HR / WATCH_ACTIVITY / WATCH_VAD 를 받아 HQS 패널 값(JSON)을 HL2_UI 로 올린다.
     python main_all_hl2_receiver.py --hqs --start-posture standing
     python main_all_hl2_receiver.py --hqs --general               # 상태 우선순위 없이 점수로 고른다
+    python main_all_hl2_receiver.py --hqs --profile output/hqs/profiles/A.json   # A 의 프로파일에 쌓는다
+    --hqs 는 패널 값과 모드를 사용자 프로파일(modules_HQS_profile)에 1 초마다 더한다. 파일이 있으면 이어 쌓고,
+    없으면 새로 만든다. --profile 을 주지 않으면 output/hqs/profiles/default.json 이다.
     python main_all_hl2_receiver.py --record output/hqs/s1.hl2rec # 원본 패킷 녹화 (+ s1.hl2rec.audio)
     --hqs 는 목소리 판정을 위해 HL2_CONTROL 로 마이크(HL2_AUDIO)를 요청한다. --no-voice 로 끈다.
     HL2_CONTROL 은 켤 스트림 전체를 한 번에 정하므로, 레이어를 요청하는 main_adaptiveMM 과 동시에
@@ -374,6 +377,22 @@ def mode_loop(hub, hqs):
         time.sleep(MODE_PERIOD_S)
 
 
+PROFILE_PERIOD_S = 1.0    # 프로파일에 현재 값을 더하는 주기. 한 번이 1 초 관측이다
+PROFILE_SAVE_S = 60.0     # 이 간격과 끝날 때 프로파일 파일에 쓴다
+
+
+def profile_loop(profile, hqs, panel):
+    """HQS 패널 값과 모드를 1 초마다 사용자 프로파일에 더하고 주기적으로 저장한다."""
+    t_save = time.time()
+    while True:
+        time.sleep(PROFILE_PERIOD_S)
+        now = time.time()
+        profile.add(now, hqs.state, panel.snapshot())
+        if now - t_save >= PROFILE_SAVE_S:
+            profile.save()
+            t_save = now
+
+
 class UiSender:
     """HQS 패널 이벤트를 HL2_UI 로 올린다. 수신 스레드 여럿이 함께 쓰므로 소켓 하나를 잠가서 쓴다."""
 
@@ -384,7 +403,8 @@ class UiSender:
     def send(self, ev):
         with self.lock:
             self.hub.send(json.dumps(ev, separators=(",", ":")).encode())
-        print(f"[HQS] HL2_UI {ev['type']}={ev['value']} ({ev['source']})", flush=True)
+        print(f"[HQS] HL2_UI {ev['type']}={ev['value']} ({ev['source']})"
+              + ("  HIGHLIGHT" if ev["highlight"] else ""), flush=True)
 
 
 def watch_loop(hub, kind, panel, ui):
@@ -415,13 +435,17 @@ def run(args):
     sock.send_multipart([b"", b"RECV_REG", keyword, identity, b"ALL"])
     print(f"{identity.decode()} :: connected tcp://{args.host}:{args.port}, kw={keyword.decode()}", flush=True)
 
-    hqs = rec = panel = ui = None
+    hqs = rec = panel = ui = profile = None
     hubs = []
     if args.hqs:
         from modules_HQS import HQS, HQSPanel
+        from modules_HQS_profile import DEFAULT_PROFILE, HQSProfile, locate
         from hub_client import HubClient, KW_HL2_MODE, KW_HL2_UI, KW_WATCH_HR, KW_WATCH_ACTIVITY, KW_WATCH_VAD
         hqs = HQS(start_posture=args.start_posture, general=args.general)
         panel = HQSPanel()
+        profile = HQSProfile(args.profile or DEFAULT_PROFILE, locate())
+        print(f"[PROFILE] {profile.path} ({'새로 만듦' if profile.is_new else f'이어 쌓음, {profile.hours():.1f} h'})"
+              f"  장소 {profile.where['place']} ({profile.where['tz'] or '서버 시간대'})", flush=True)
         ui_hub = HubClient(args.host, args.port, recv_kw=None, result_kw=KW_HL2_UI, identity=identity + b"_UI")
         ui = UiSender(ui_hub)
         hubs.append(ui_hub)
@@ -438,6 +462,7 @@ def run(args):
                              identity=identity + b"_MODE")
         hubs.append(mode_hub)
         threading.Thread(target=mode_loop, args=(mode_hub, hqs), daemon=True).start()
+        threading.Thread(target=profile_loop, args=(profile, hqs, panel), daemon=True).start()
         # 수신 등록은 identity 마다 하나이고 HubClient 는 keyword 를 구분해 주지 않아 채널마다 따로 둔다
         for kw, kind in ((KW_WATCH_HR, "hr"), (KW_WATCH_ACTIVITY, "activity"), (KW_WATCH_VAD, "vad")):
             hub = HubClient(args.host, args.port, recv_kw=kw, identity=identity + b"_" + kw, queue_size=32)
@@ -461,6 +486,9 @@ def run(args):
                 _, _, kw, src, fid, data = msg
                 task_queue.put((None, kw, src, fid, data))
     finally:
+        if profile is not None:
+            profile.save()
+            print(f"[PROFILE] 저장 {profile.path} ({profile.hours():.1f} h)", flush=True)
         if audio_hub is not None:                            # 끝날 때 마이크를 바로 놓게 한다
             import hl2_sensors_pb2 as sensproto
             audio_hub.send(sensproto.HL2Control(send_audio=False).SerializeToString())
@@ -487,6 +515,8 @@ if __name__ == "__main__":
                     help="원본 HL2DATA 패킷을 이 파일에 이어 쓴다(오디오는 <파일>.audio). modules_HQS.py --replay 로 재생")
     ap.add_argument("--no-voice", action="store_true",
                     help="HQS: 마이크를 요청하지 않는다. voice 요소는 0 이 된다")
+    ap.add_argument("--profile", default=None,
+                    help="HQS: 사용자 프로파일 JSON. 있으면 이어 쌓고 없으면 만든다(기본 output/hqs/profiles/default.json)")
     args = ap.parse_args()
     try:
         run(args)

@@ -6,7 +6,7 @@
 | keyword | 본문 | 용도 |
 |---|---|---|
 | `HL2_MODE` | UTF-8 문자열 `FOCUS` / `MOVING` / `TALKING` / `NONE` | 모드 전환 창 |
-| `HL2_UI` | UTF-8 JSON `{"type","source","value","timestamp"}` | HQS 패널(Emotional / Physical / Social / Digital) 값 |
+| `HL2_UI` | UTF-8 JSON `{"type","source","value","timestamp","highlight"}` | HQS 패널(Emotional / Physical / Social / Digital) 값과 영역 하이라이트 |
 
 서버는 HL2 한 대(한 사용자)를 기준으로 계산한다. 같은 broker 에 HL2 가 여러 대 붙어 있으면 모두 같은 값을 받는다.
 
@@ -66,7 +66,7 @@ HL2 쪽 처리:
 본문: UTF-8 JSON 한 개.
 
 ```json
-{"type": "social", "source": "combined", "value": 0.5, "timestamp": 1730000002.341}
+{"type": "social", "source": "combined", "value": 0.62, "timestamp": 1730000002.341, "highlight": true}
 ```
 
 | 필드 | 타입 | 내용 |
@@ -75,20 +75,57 @@ HL2 쪽 처리:
 | `source` | string | 값을 만든 근거. 아래 표 |
 | `value` | float | 패널에 바로 쓰는 0~1 값 |
 | `timestamp` | double | 서버 시계 기준 Unix 초. 순서 확인용 |
+| `highlight` | bool | `true` 면 이 type 의 영역을 하이라이트한다. 아래 3.2 |
 
 | type | source | value | 언제 오나 |
 |---|---|---|---|
 | `emotion` | `heart_rate` | 심박 <60: 0.0, 60~100: 0.4, 100~130: 0.8, >130: 1.0 | 와치 심박이 올 때마다(약 1 Hz) |
 | `physical` | `activity` | 와치 활동 STILL 0.0, WALKING 0.5, RUNNING 1.0 | 와치 활동이 바뀔 때 |
 | `physical` | `hqs` | HL2 머리 이동이 걷기면 0.5, 아니면 0.0 | 와치가 없을 때만. 값이 바뀔 때 |
-| `social` | `combined` | (얼굴 + 말소리) x 0.5 → 0.0 / 0.5 / 1.0 | 값이 바뀔 때 |
+| `social` | `combined` | 0~1 연속값. 아래 3.1 | 마지막으로 보낸 값과 0.05 이상 달라질 때 |
 | `digital` | — | — | 아직 보내지 않는다 |
 
-- social 의 얼굴: HL2 카메라에 대화 거리(3.6 m) 안의 얼굴이 보임. 말소리: 와치 마이크나 HL2 마이크 중 하나라도 말소리가 있음.
 - 매번 값이 오는 게 아니라 바뀔 때 온다. HL2 는 type 별 마지막 값을 들고 있다가 새 값이 오면 바꾼다.
 - 와치(서버의 main_devicebridge)가 없거나 5 초 넘게 끊기면 emotion 은 오지 않고, physical 은 `source: "hqs"` 로 온다.
   와치가 돌아오면 다음 와치 활동 변화부터 다시 `activity` 로 온다.
-- Unity `JsonUtility.FromJson` 으로 그대로 읽힌다(type, source: string / value: float / timestamp: double).
+- Unity `JsonUtility.FromJson` 으로 그대로 읽힌다(type, source: string / value: float / timestamp: double /
+  highlight: bool).
+
+### 3.1 social 계산
+
+```
+social = 0.5 x (face + voice)          각 항 0~1, 결과 0~1 연속값
+```
+
+- `face`: 대화 거리 안에 사람 얼굴이 보이는 정도.
+  1. HL2 RGB 에서 얼굴을 초당 10 번 찾는다(OpenCV YuNet).
+  2. 얼굴마다 거리를 잰다. depth 가 있으면 얼굴 영역 depth 의 중앙값, 없으면 얼굴 폭(0.15 m)과 카메라 내부 파라미터로 잰다.
+  3. 거리를 `sigmoid((3.6 m - 거리) / 0.4 m)` 로 바꾼다. 3.6 m(사회적 대화 거리의 바깥 경계)에서 0.5, 2.6 m 에서 0.92, 4.6 m 에서 0.08.
+     얼굴이 여럿이면 가장 큰 값, 없으면 0.
+  4. 순간값이 아니라 1 초 시정수로 평활한다. 얼굴이 나타나면 약 1 초에 0.63, 3 초에 0.95 까지 오른다.
+- `voice`: 최근 3 초 동안 말소리가 있던 정도.
+  1. 마이크 소리를 20 ms 씩 webrtcvad 로 말소리 여부를 가른다.
+  2. 최근 3 초 중 말소리였던 시간 비율(밀도)을 낸다.
+  3. 밀도를 `sigmoid((밀도 - 0.3) / 0.08)` 로 바꾼다. 밀도 0 에서 0.02, 0.3 에서 0.5, 0.5 이상에서 0.92 이상.
+  4. HL2 마이크(HL2_AUDIO)와 와치 마이크(WATCH_VAD) 각각 이렇게 구해 큰 쪽을 쓴다. 와치가 없으면 HL2 마이크만 쓴다.
+- 대략: 아무도 없고 조용함 ≈ 0.01, 가까이 사람이 있고 조용함 ≈ 0.5, 가까이 사람과 대화 중 ≈ 1.0. 그 사이는 연속으로 움직인다.
+
+### 3.2 highlight
+
+서버가 type 별로 따로 판정한다. 한 메시지의 `highlight` 는 그 메시지 `type` 의 영역에만 해당한다.
+
+- 새 값이 같은 type 의 최근 W 초 동안의 값들과 D 이상 다르면 `true`.
+- 한 번 `true` 가 되면 그 값부터 다시 잰다(같은 변화로 연달아 켜지지 않는다).
+- 같은 값이 다시 온 메시지(emotion 은 약 1 Hz 로 같은 값이 반복된다)와, 와치가 끊기거나 돌아와 source 가 바뀐 첫 메시지는 `false`.
+- 하이라이트를 얼마나 보여 줄지는 HL2 가 정한다. 끄는 메시지는 따로 오지 않는다.
+
+현재 기준(서버 `modules/modules_HQS.py` 의 `HIGHLIGHT`, 디버깅하며 바꾼다):
+
+| type | D | W | 뜻 |
+|---|---|---|---|
+| `emotion` | 0.4 | 3 s | 심박 구간이 한 칸 이상 바뀜(0.8 ↔ 1.0 은 제외) |
+| `physical` | 0.5 | 3 s | 활동이 한 단계 이상 바뀜 |
+| `social` | 0.3 | 3 s | 3 초 안에 0.3 이상 바뀜 |
 
 ## 4. HL2 앱이 이미 해 주고 있어야 하는 것
 

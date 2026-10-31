@@ -31,6 +31,7 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 │   ├── modules_hl2.py         # Hl2Manager               (HoloLens2 streaming via hl2ss)
 │   ├── modules_behavior.py    # BehaviorPropertyEstimator (GLB -> property JSON, no visualization)
 │   ├── modules_HQS.py         # HQS (user state) + HQSPanel (panel values)
+│   ├── modules_HQS_profile.py # HQSProfile (per-user statistics of panel values and modes)
 │   │
 │   ├── meshrecon/             # TRELLIS image-to-3D
 │   ├── meshalignment/         # mesh alignment
@@ -198,7 +199,8 @@ With `--hqs` it also runs the user-state module (`modules/modules_HQS.py`) and p
 channels to the HoloLens2:
 
 - `HL2_MODE` — `FOCUS`, `MOVING`, `TALKING` or `NONE`, once per second.
-- `HL2_UI` — HQS panel values (emotion / physical / social) as JSON, sent when a value changes.
+- `HL2_UI` — HQS panel values (emotion / physical / social) as JSON, sent when a value changes,
+  with a per-type `highlight` flag when the value changes sharply within a few seconds.
 
 To judge speech it requests the HL2 microphone over `HL2_CONTROL`. The wire format for the
 headset side is specified in [_comm/HQS_PROTOCOL.md](_comm/HQS_PROTOCOL.md).
@@ -216,6 +218,7 @@ python main_all_hl2_receiver.py --hqs      # terminal 3
 | `--record <file>` | appends raw `HL2DATA` packets to `<file>` and microphone chunks to `<file>.audio`; replay with `python modules/modules_HQS.py --replay <file>` |
 | `--no-voice` | does not request the microphone; `TALKING` is then never reported |
 | `--general` | selects the qualifying state with the highest score instead of the fixed priority order |
+| `--profile <file>` | user profile to accumulate into (default `output/hqs/profiles/default.json`); see below |
 
 `HL2_CONTROL` sets the complete stream state on the headset, so running `--hqs` together
 with `main_adaptiveMM.py` makes the two overwrite each other's requests.
@@ -235,6 +238,24 @@ Run the bridge whenever the panel is expected to reflect watch data or the phone
 use. Without it the receiver keeps running; after 5 s without watch messages it logs a
 warning and switches to the substitutes above, and it returns to the watch values once
 messages resume.
+
+**User profile.** With `--hqs` the receiver adds the current panel values, heart rate and mode
+to a per-user profile once per second while `HL2DATA` is arriving, and writes it every 60 s and
+on exit. One JSON file holds one person (`--profile output/hqs/profiles/A.json`). An existing
+file is always loaded and extended; a missing file is created. The profile stores statistics,
+not a log:
+
+- one entry per local calendar month, keeping the current month and the previous six;
+- per month, weekday and weekend × 24 local hours, each with observed seconds, seconds with the
+  watch connected, seconds per mode, and `[n, sum, sum of squares]` for emotion, physical,
+  social, digital and heart rate (seconds without a value, such as no watch, are not counted);
+- per month, observed seconds per place.
+
+The size is therefore bounded (a few hundred KB at most) regardless of how long it is
+recorded, and any period or hour range can be merged by adding the entries. The place is the
+city-level location of the server's public IP, looked up once at start from `ipinfo.io`; this
+assumes the headset is on the same network as the server. If the lookup fails the place is
+`unknown` and the server's time zone is used.
 
 ### 5. Device bridge — Galaxy Watch and phone (`main_devicebridge.py`)
 

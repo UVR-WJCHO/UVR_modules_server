@@ -52,6 +52,8 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 ├── metaobj_wrapper/           # mesh/glb wrapper assets
 ├── output/                    # pipeline outputs (git-ignored)
 │
+├── requirements-wiseui.txt    # comm_hub + every entry point except main_metaobjrecon
+├── requirements-metaobj.txt   # comm_hub + main_metaobjrecon
 ├── requirements.txt           # legacy/bootstrap dependency snapshot
 ├── .env                       # API keys (OPENAI_API_KEY) — git-ignored
 ├── WEIGHTS.md                 # locations of all (git-ignored) model weights
@@ -68,6 +70,17 @@ validated server environment is Python 3.10 with PyTorch 2.7.0+cu128.
 ```bash
 conda activate uvr_integ
 ```
+
+To build a fresh environment, the entry points split into two projects, each with its own
+dependency list traced from its imports. `comm_hub.py` is part of both.
+
+| file | entry points |
+|---|---|
+| `requirements-wiseui.txt` | `comm_hub.py`, `main_all_hl2_receiver.py`, `main_devicebridge.py`, `main_adaptiveMM.py`, `main_handtrack.py`, `main_handtrack_forecast.py` |
+| `requirements-metaobj.txt` | `comm_hub.py`, `main_metaobjrecon.py` |
+
+Install the CUDA build of `torch` first, then the file; the header of each file gives the
+exact commands and the packages that must be built from source.
 
 `requirements.txt` is an older Python-3.10/CUDA-12.1 bootstrap snapshot, not an
 exact export of the current `uvr_integ` environment. Do not replace a working

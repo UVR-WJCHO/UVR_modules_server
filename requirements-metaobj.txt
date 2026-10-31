@@ -1,4 +1,7 @@
-# main_metaobjrecon.py — capture, reconstruct, align, combine
+# main_metaobjrecon.py — capture, reconstruct, align, combine, estimate properties
+#
+# comm_hub.py (the broker) is shared with requirements-wiseui.txt and needs only
+# pyzmq, listed below.
 #
 # Traced from the import chain, not guessed:
 #   main_metaobjrecon -> modules_mesh    -> meshrecon/trellis (TRELLIS)
@@ -6,16 +9,18 @@
 #                       -> modules_segment -> sam2_realtime, pycocotools
 #                       -> modules_jointtrack -> meshalignment (nvdiffrast)
 #                       -> metaobj_wrapper/combine_rocket_glb
+#                       -> modules_behavior (flag_behavior, on by default)
+#                          -> behavior/utils (OpenAI API, pytorch3d rendering)
 #   plus _comm/hl2_data_pb2 for the wire format.
 #
 # Verified against uvr_integ (RTX 5090, CUDA 12.8, Python 3.10), where every
 # module above imports and TRELLIS reports "[SPARSE] Backend: spconv,
 # Attention: xformers".
 #
-#   conda create -n uvr_meshrecon python=3.10 && conda activate uvr_meshrecon
+#   conda create -n uvr_metaobj python=3.10 && conda activate uvr_metaobj
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-#   pip install -r requirements-meshrecon.txt
-#   # then the three that pip cannot resolve — see NOT INSTALLABLE FROM PyPI below
+#   pip install -r requirements-metaobj.txt
+#   # then the four that pip cannot resolve — see NOT INSTALLABLE FROM PyPI below
 #
 # torch is deliberately NOT pinned here: the wheel has to match your CUDA
 # toolkit, so install it first from the right index. 2.7.0+cu128 is what this
@@ -62,6 +67,10 @@ pycocotools==2.0.10
 ultralytics==8.3.203
 mediapipe==0.10.14          # modules_segment imports it at module level
 
+# --- behavior properties (modules_behavior -> behavior/utils) ---
+openai==2.43.0              # VLM queries; key in .env (OPENAI_API_KEY)
+# pytorch3d renders the views sent to the VLM; not on PyPI, see below
+
 # --- alignment (meshalignment) ---
 # nvdiffrast is not on PyPI — see below. `ninja` must be on PATH or nvdiffrast
 # cannot build its CUDA kernels and silently falls back.
@@ -75,9 +84,12 @@ ninja
 #   pip install kaolin==0.18.0 \
 #       -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.7.0_cu128.html
 #   pip install -e modules/segmentor/sam2_realtime                # SAM-2 1.0
+#   pip install --no-build-isolation \
+#       "git+https://github.com/facebookresearch/pytorch3d.git@V0.7.8"   # 0.7.8 in uvr_integ
 #
-# The last one is the in-repo SAM2 package. It builds a CUDA extension
-# (sam2/_C.so), so it needs the CUDA toolkit and ninja present.
+# SAM2 is the in-repo package. It and pytorch3d build CUDA extensions
+# (sam2/_C.so, pytorch3d/_C.so), so they need the CUDA toolkit and ninja present
+# and must be built against the torch already installed (hence no build isolation).
 #
 # ---------------------------------------------------------------------------
 # Deliberately absent

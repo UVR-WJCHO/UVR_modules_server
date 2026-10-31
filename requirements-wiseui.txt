@@ -1,0 +1,76 @@
+# WiseUI server — every entry point except main_metaobjrecon.py
+#
+#   comm_hub.py                  broker; also in requirements-metaobj.txt (needs only pyzmq)
+#   main_all_hl2_receiver.py     HL2 viewer + user state (--hqs)
+#   main_devicebridge.py         Galaxy Watch / phone bridge
+#   main_adaptiveMM.py           adaptive multimodal metrics over hl2ss
+#   main_handtrack.py            hand tracking + gesture
+#   main_handtrack_forecast.py   delay-compensated hand tracking
+#
+# Traced from each entry point's import chain (imports inside functions
+# included), not guessed:
+#   main_handtrack -> modules_hand (HandTracker_onnx) -> handtracker_onnx
+#                  -> modules_gesture -> gestureclassifier
+#                  -> modules_obj (YOLO)
+#                  -> _utils/visualize
+#   main_handtrack_forecast -> handtracker_onnx
+#                           -> delay_nowcasting (ONNX runner, polars schema)
+#   main_all_hl2_receiver --hqs -> modules_HQS (OpenCV YuNet), modules_HQS_profile
+#                               -> devicebridge/vad (webrtcvad)
+#   main_devicebridge -> devicebridge/watch (websockets), phone, vad
+#   main_adaptiveMM -> adaptivemm, _hl2ss (PyAV)
+#   all -> _comm/hub_client (pyzmq), _comm/*_pb2 (protobuf)
+#
+# Versions are the ones installed in uvr_integ (RTX 5090, CUDA 12.8, Python 3.10).
+#
+#   conda create -n uvr_wiseui python=3.10 && conda activate uvr_wiseui
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   pip install -r requirements-wiseui.txt
+#
+# torch is deliberately NOT pinned here: the wheel has to match your CUDA
+# toolkit, so install it first from the right index. 2.7.0+cu128 is what this
+# was verified on.
+
+# --- core ---
+numpy==2.0.1
+opencv-python==4.12.0.88    # >= 4.5.4 for the YuNet face detector (cv2.FaceDetectorYN)
+
+# --- comm_hub transport ---
+pyzmq==27.0.1
+protobuf==4.25.8            # _comm/*_pb2.py gencode
+
+# --- hand tracker (WiLoR-ONNX) ---
+# onnxruntime-gpu, NOT onnxruntime: the CPU build has no CUDAExecutionProvider
+# and module_wilor_onnx silently falls back to CPU. It finds cuDNN/cuBLAS
+# through the nvidia-* wheels torch installs, so import torch first.
+onnxruntime-gpu==1.22.0
+onnx==1.22.0
+ultralytics==8.3.203        # YOLO hand detector
+yacs==0.1.8                 # wilor_onnx_utils config
+
+# --- gesture classifier (FLAG_GESTURE; torch only beyond the above) ---
+# nothing extra
+
+# --- object-aware gating (FLAG_INTERACTION_DETECT) ---
+# modules_obj also uses ultralytics, already listed
+
+# --- visualization (_utils/visualize.py, imported unconditionally) ---
+matplotlib==3.10.5
+pyrender==0.1.45
+trimesh==4.7.4
+
+# --- modules_hand imports mediapipe at module level for HandTracker_mp ---
+# Unused by these entry points but the import runs, so it must be installed.
+mediapipe==0.10.14
+
+# --- forecast (delay_nowcasting canonical schema) ---
+polars==1.33.1
+
+# --- user state (main_all_hl2_receiver --hqs) and device bridge ---
+webrtcvad==2.0.10           # C extension built at install; needs a C compiler
+websockets==16.0            # watch link in main_devicebridge
+tzdata==2025.2              # zoneinfo for the HQS profile where the OS has no tz database
+
+# --- hl2ss (main_adaptiveMM) ---
+av==15.1.0                  # PV (H.264) decoding in _hl2ss/hl2ss.py
+requests==2.32.4            # _hl2ss/hl2ss_dp.py, imported by hl2ss_lnm

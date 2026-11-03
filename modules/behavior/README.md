@@ -46,6 +46,7 @@ OPENAI_API_KEY=...
         ├── seg                                 # 파트 세그멘테이션 맵 (.npy)
         │   ├── 001_s.npy
         │   └── ...
+        ├── part_manifest.json                  # 렌더링 partId와 GLB 노드명 매핑
         ├── property_visualizations             # 속성별 시각화 결과
         │   ├── caption
         │   ├── material
@@ -54,8 +55,11 @@ OPENAI_API_KEY=...
         │   ├── density_g_cm3
         │   ├── poissons_ratio
         │   ├── tensile_strength_MPa
-        │   ├── hardness
-        │   └── thermal_conductivity_W_mK
+        │   ├── hardness_HV
+        │   ├── thermal_conductivity_W_mK
+        │   ├── electrical_conductivity_MS_m
+        │   ├── thermal_expansion_coeff_1e-6_K
+        │   └── fracture_toughness_MPa_sqrt_m
         ├── vlm_result.json                     # 최종 JSON 결과
         └── vlm_result.txt                      # VLM 초기 응답 로그
 ```
@@ -97,8 +101,11 @@ python main.py \
             "density_g_cm3": [2.6, 2.85],
             "poissons_ratio": [0.32, 0.36],
             "tensile_strength_MPa": [70.0, 600.0],
-            "hardness": [20.0, 180.0],
-            "thermal_conductivity_W_mK": [120.0, 235.0]
+            "hardness_HV": [20.0, 180.0],
+            "thermal_conductivity_W_mK": [120.0, 235.0],
+            "electrical_conductivity_MS_m": [18.0, 38.0],
+            "thermal_expansion_coeff_1e-6_K": [21.0, 24.0],
+            "fracture_toughness_MPa_sqrt_m": [15.0, 45.0]
         },
         ...
     ]

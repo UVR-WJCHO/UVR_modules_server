@@ -6,11 +6,9 @@ JSON 틀을 만들고, modules_behavior.py 가 재질·어포던스·물성을 �
 
 파츠를 이름으로 맞추는 이유: behavior 는 trimesh 의 nodes_geometry 순회 순서로 partId 를
 매기는데, 그 순서가 control_parts 인덱스와 같다는 보장이 없다. 실제로 5 파츠 합본에서
-partId 1 이 control_parts4 였다. 순서로 매핑하면 재질이 뒤집힌다.
-
-behavior 가 아직 내지 않는 세 물성(전기전도도·열팽창계수·파괴인성)은 재질별 상수표로
-채운다. 모듈이 그 셋을 내게 되면 MISSING_PROPERTY_PRIORS 와 그 분기를 지우면 된다. JSON
-안에서는 추정값과 구분되지 않으므로 실행 로그에 남긴다.
+partId 1 이 control_parts4 였다. 순서로 매핑하면 재질이 뒤집힌다. behavior 는 렌더할 때
+partId 와 GLB 노드 이름을 part_manifest.json 에 남기고 vlm_result.json 의 objectName 에
+노드 이름을 넣는다. 여기서는 그 objectName 으로 맞춘다.
 
 단독 실행:
     python modules/modules_metaobj.py --parts a.glb b.glb --transforms t.json --out dir --name NAME
@@ -26,7 +24,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import trimesh
 
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO / "metaobj_wrapper"))
@@ -39,23 +36,6 @@ PROPERTY_LABELS = [
     "hardness_HV", "thermal_conductivity_W_mK",
     "electrical_conductivity_MS_m", "thermal_expansion_coeff_1e-6_K", "fracture_toughness_MPa_sqrt_m",
 ]
-_VLM_KEY = {"hardness_HV": "hardness"}          # behavior 쪽 이름이 다른 것
-_N_FROM_VLM = 6                                  # 앞 6 개는 behavior 가 낸다
-
-# behavior 가 아직 내지 않는 3 개. 재질별 (전기전도도 MS/m, 열팽창 1e-6/K, 파괴인성 MPa√m).
-# 대략적인 교과서 범위이고 검증한 값이 아니다. 임시값이다.
-MISSING_PROPERTY_PRIORS = {
-    "carbon_steel":    ((5.0, 7.0),   (11.0, 13.0), (50.0, 120.0)),
-    "stainless_steel": ((1.3, 1.5),   (16.0, 18.0), (100.0, 250.0)),
-    "aluminium":       ((18.0, 38.0), (21.0, 24.0), (15.0, 45.0)),
-    "copper":          ((55.0, 59.0), (16.5, 17.5), (30.0, 100.0)),
-    "brass":           ((14.0, 16.0), (18.0, 21.0), (30.0, 80.0)),
-    "bronze":          ((7.0, 10.0),  (17.0, 19.0), (30.0, 70.0)),
-    "titanium":        ((0.5, 2.4),   (8.5, 9.5),   (50.0, 110.0)),
-    "zinc_alloy":      ((15.0, 17.0), (26.0, 28.0), (20.0, 40.0)),
-    "cast_iron":       ((1.0, 2.0),   (10.0, 12.0), (10.0, 25.0)),
-}
-_GENERIC_MISSING = ((1.0, 30.0), (10.0, 25.0), (20.0, 100.0))
 
 # VLM 이 금속 사전에 없는 재질(유리·고무·플라스틱 등)을 내면 behavior 는 물성 범위를 비워
 # 보낸다. 그 파츠만 여기서 채운다. 9 개 전부, PROPERTY_LABELS 순서. 임시값이다.
@@ -93,7 +73,7 @@ def _metal_priors() -> dict:
 def ranges_for(material: str, vlm_part: dict | None = None) -> tuple[str, list[dict]]:
     """재질 이름 -> (정규화한 이름, PROPERTY_LABELS 순서의 9 개 범위).
 
-    VLM 이 범위를 준 금속이면 그 6 개 + 임시 3 개. VLM 이 'steel' 처럼 사전 밖 이름을 내면
+    VLM 이 범위를 준 금속이면 그 9 개. VLM 이 'steel' 처럼 사전 밖 이름을 내면
     별칭으로 사전 금속에 맞춰 사전 범위를 쓴다. 비금속은 NONMETAL_PRIORS, 그것도 없으면
     아주 넓은 공통 범위다. 어느 경우든 9 개가 나간다.
     """
@@ -101,42 +81,24 @@ def ranges_for(material: str, vlm_part: dict | None = None) -> tuple[str, list[d
     name = _ALIASES.get(name, name)
     vals: list[tuple[float, float]] = []
     if vlm_part is not None:
-        for label in PROPERTY_LABELS[:_N_FROM_VLM]:
-            v = vlm_part.get(_VLM_KEY.get(label, label))
+        for label in PROPERTY_LABELS:
+            v = vlm_part.get(label)
             if isinstance(v, (list, tuple)) and len(v) == 2:
                 vals.append((float(v[0]), float(v[1])))
-    metals = _metal_priors()
-    if len(vals) != _N_FROM_VLM and name in metals:
-        m = metals[name]
-        vals = [tuple(map(float, m[_VLM_KEY.get(l, l)])) for l in PROPERTY_LABELS[:_N_FROM_VLM]]
-    if len(vals) == _N_FROM_VLM:
-        vals += list(MISSING_PROPERTY_PRIORS.get(name, _GENERIC_MISSING))
-    elif name in NONMETAL_PRIORS:
-        vals = NONMETAL_PRIORS[name]
-    else:
-        vals = _GENERIC_ALL
+    if len(vals) != len(PROPERTY_LABELS):
+        metals = _metal_priors()
+        if name in metals:
+            vals = [tuple(map(float, metals[name][l])) for l in PROPERTY_LABELS]
+        elif name in NONMETAL_PRIORS:
+            vals = NONMETAL_PRIORS[name]
+        else:
+            vals = _GENERIC_ALL
     return name, [{"label": l, "min": float(lo), "max": float(hi)} for l, (lo, hi) in zip(PROPERTY_LABELS, vals)]
-
-
-def part_nodes_in_vlm_order(glb_path) -> list[str]:
-    """behavior 가 partId 를 매기는 순서 그대로 노드 이름을 돌려준다. partId k -> [k-1].
-
-    preprocess_glb_for_vlm.create_vlm_dataset_from_glb 의 순회를 그대로 따른다.
-    로드 방식(force='scene')과 빈 geometry 를 건너뛰는 규칙까지 같아야 순서가 같다.
-    """
-    scene = trimesh.load(str(glb_path), force="scene")
-    names = []
-    for node_name in scene.graph.nodes_geometry:
-        _, geometry_name = scene.graph[node_name]
-        if len(scene.geometry[geometry_name].vertices) == 0:
-            continue
-        names.append(node_name)
-    return names
 
 
 def _to_metadata(part: dict) -> dict:
     material, ranges = ranges_for(part.get("material", ""), part)
-    if not any(isinstance(part.get(_VLM_KEY.get(l, l)), (list, tuple)) for l in PROPERTY_LABELS[:_N_FROM_VLM]):
+    if not any(isinstance(part.get(l), (list, tuple)) for l in PROPERTY_LABELS):
         src = ("금속 사전(별칭)" if material in _metal_priors() else
                "NONMETAL_PRIORS" if material in NONMETAL_PRIORS else "공통 범위")
         print(f"[metaobj] partId={part.get('partId')} VLM 재질 {part.get('material')!r} -> {material!r}, "
@@ -144,22 +106,14 @@ def _to_metadata(part: dict) -> dict:
     return {"material": material, "affordance": part.get("affordance", ""), "rangeProperties": ranges}
 
 
-def properties_from_vlm(vlm_json, glb_path, n_parts: int) -> list[dict]:
-    """vlm_result.json -> control_parts 인덱스 순서의 metadata 목록."""
+def properties_from_vlm(vlm_json, n_parts: int) -> list[dict]:
+    """vlm_result.json -> control_parts 인덱스 순서의 metadata 목록. objectName 으로 맞춘다."""
     data = json.loads(Path(vlm_json).read_text(encoding="utf-8"))
-    order = part_nodes_in_vlm_order(glb_path)
     expected = [f"{OBJECT_NAME_PREFIX}{i}" for i in range(n_parts)]
-    if sorted(order) != sorted(expected):
-        raise RuntimeError(f"합본 GLB 의 노드가 예상과 다르다: {order} vs {expected}")
-    by_node = {}
-    for p in data["parts"]:
-        k = int(p["partId"])
-        if not 1 <= k <= len(order):
-            raise RuntimeError(f"partId {k} 가 노드 수 {len(order)} 를 벗어난다")
-        by_node[order[k - 1]] = p
-    missing = [n for n in expected if n not in by_node]
-    if missing:
-        raise RuntimeError(f"VLM 결과에 없는 파츠: {missing}")
+    names = [p.get("objectName") for p in data["parts"]]
+    if sorted(map(str, names)) != sorted(expected):
+        raise RuntimeError(f"VLM 결과의 objectName 이 합본 노드와 다르다: {names} vs {expected}")
+    by_node = dict(zip(names, data["parts"]))
     return [_to_metadata(by_node[n]) for n in expected]
 
 
@@ -200,10 +154,8 @@ def export_metaobj(part_files, transforms_json, out_dir, name: str, estimator=No
         try:
             vlm_json = estimator.run(str(glb), output_json=str(out_dir / "vlm_result.json"),
                                      vlm_input_dir=str(work))
-            for spec, props in zip(specs, properties_from_vlm(vlm_json, glb, len(part_files))):
+            for spec, props in zip(specs, properties_from_vlm(vlm_json, len(part_files))):
                 spec["metadata"] = props
-            print(f"[metaobj] 물성 {_N_FROM_VLM} 개는 VLM 추정, "
-                  f"{PROPERTY_LABELS[_N_FROM_VLM:]} 는 재질별 임시값", flush=True)
             render = work / name / "images" / "001.png"
             if render.exists():
                 write_teaser(render, png)

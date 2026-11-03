@@ -31,7 +31,23 @@ def _parse_message(message):
     return "unknown", "unknown", "unknown"
 
 
+def _load_part_manifest(base_path, case_name):
+    manifest_path = os.path.join(base_path, case_name, "part_manifest.json")
+    if not os.path.exists(manifest_path):
+        return {}
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    return {
+        int(part["partId"]): part
+        for part in manifest.get("parts", [])
+        if "partId" in part
+    }
+
+
 def _save_results(votes, results_file_path, base_path, case_name, output_json):
+    manifest_by_id = _load_part_manifest(base_path, case_name)
     json_data = {"version": 1, "parts": []}
     for part_id, v in sorted(votes.items()):
         material = Counter(v["materials"]).most_common(1)[0][0]
@@ -41,7 +57,7 @@ def _save_results(votes, results_file_path, base_path, case_name, output_json):
         priors = MATERIAL_PROPERTY_PRIORS.get(material, {})
 
         part_json = {
-            "objectName": caption,
+            "objectName": manifest_by_id.get(part_id, {}).get("objectName"),
             "colorHex": "#FFFFFF",
             "colorAlpha": 1.0,
             "smoothness": 0.5,

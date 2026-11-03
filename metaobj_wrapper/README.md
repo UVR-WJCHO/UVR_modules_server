@@ -218,6 +218,6 @@ python metaobj_wrapper/make_examples.py all   ToyCar Lantern
 `output/metaobj_examples/SOURCES.md` 한 파일에 모은다. 다운로드·파츠·VLM 렌더 같은 중간물은
 `output/metaobj_examples/_work/<이름>/` 에 있고 지워도 된다(지우면 다음 `build` 가 VLM 을 다시 부른다).
 
-behavior 모듈이 금속 9 종만 알아서 비금속은 사람이 `OVERRIDES` 에 적는다. `build` 가 만든
+behavior 모듈이 금속 8 종만 알아서 비금속은 사람이 `OVERRIDES` 에 적는다. `build` 가 만든
 `_work/<이름>/parts.json` 과 `vlm_result.json`, 그리고 `SOURCES.md` 의 표를 보고 적는다. 비금속 물성은 `modules_metaobj.NONMETAL_PRIORS`
 의 임시값이다. 두 번째 `build` 부터는 `vlm_result.json` 이 있으면 VLM 을 다시 부르지 않는다.

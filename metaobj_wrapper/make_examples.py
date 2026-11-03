@@ -4,7 +4,7 @@ HL2 쪽 테스트에 쓸 다양한 객체가 필요한데 실제 파이프라인
 나온다. 대신 이미 파츠로 나뉜 공개 GLB(Khronos glTF-Sample-Assets)를 받아 파츠별로 쪼개고,
 서버와 같은 export_metaobj 로 합본·물성 추정·티저까지 돌린다.
 
-behavior 모듈의 재질 사전이 아직 금속 9 종뿐이라 비금속 파츠도 금속으로 찍힌다. 그래서
+behavior 모듈의 재질 사전이 아직 금속 8 종뿐이라 비금속 파츠도 금속으로 찍힌다. 그래서
 build 뒤에 사람이 OVERRIDES 에 파츠별 재질을 적고 apply 로 덮어쓴다. 비금속 물성은
 NONMETAL_PRIORS 의 임시값이다. 모듈이 비금속을 내게 되면 이 둘은 지운다.
 
@@ -29,7 +29,7 @@ import trimesh
 
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO / "modules"))
-from modules_metaobj import export_metaobj, part_nodes_in_vlm_order, ranges_for   # noqa: E402
+from modules_metaobj import export_metaobj, ranges_for   # noqa: E402
 
 ASSETS = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models"
 OUT_ROOT = _REPO / "output" / "metaobj_examples"
@@ -121,8 +121,7 @@ def write_sources() -> None:
         final = {p["objectName"]: p["material"] for p in json.loads(meta.read_text())["parts"]}
         vlm = {}
         if (work / "vlm_result.json").exists():
-            order = part_nodes_in_vlm_order(d / f"{name}.glb")
-            vlm = {order[p["partId"] - 1]: p["material"]
+            vlm = {p["objectName"]: p["material"]
                    for p in json.loads((work / "vlm_result.json").read_text())["parts"]}
         lines.append(f"## {name}\n\nLicense: {lic}\n\n| objectName | source node | material | VLM said |\n|---|---|---|---|")
         for p in parts:

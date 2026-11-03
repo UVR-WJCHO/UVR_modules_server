@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import os
+import json
 import imageio
 import matplotlib.pyplot as plt
 import trimesh
@@ -214,6 +215,20 @@ def create_vlm_dataset_from_glb(glb_path, output_base, case_name="scene", dpi=75
     gpt_dir     = os.path.join(case_dir, "gpt_input")
     for d in [seg_dir, images_dir, gpt_dir]:
         os.makedirs(d, exist_ok=True)
+
+    # Preserve the exact relationship between rendered part IDs and GLB node
+    # names.  The traversal order is owned by trimesh and is not guaranteed to
+    # match the node order in the source GLB.
+    manifest_path = os.path.join(case_dir, "part_manifest.json")
+    manifest_data = {
+        "version": 1,
+        "parts": [
+            {"partId": info["id"], "objectName": info["name"]}
+            for info in part_info
+        ],
+    }
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest_data, f, indent=4, ensure_ascii=False)
 
     elevations = [ 30, -30,  30, -30]
     azimuths   = [  0,   0, 180, 180]

@@ -182,12 +182,14 @@ if __name__ == "__main__":
     ap.add_argument("--out", required=True, help="출력 폴더")
     ap.add_argument("--name", required=True, help="파일 이름이자 GLB 루트 노드 이름")
     ap.add_argument("--no-behavior", action="store_true", help="VLM 없이 상수 기본값으로")
+    ap.add_argument("--vlm_type", default="qwen", choices=["qwen", "gpt4"],
+                    help="qwen = 연구실 서버 Qwen3.8-27B, gpt4 = OpenAI gpt-4o-mini")
     args = ap.parse_args()
 
     est = None
     if not args.no_behavior:
         sys.path.insert(0, str(_REPO / "modules"))
         from modules_behavior import BehaviorPropertyEstimator
-        est = BehaviorPropertyEstimator()
+        est = BehaviorPropertyEstimator(vlm_type=args.vlm_type)
     g, j, t = export_metaobj(args.parts, args.transforms, args.out, args.name, est)
     print(f"[metaobj] {g}\n[metaobj] {j}\n[metaobj] {t or '티저 없음'}")

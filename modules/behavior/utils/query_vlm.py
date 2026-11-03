@@ -3,7 +3,7 @@ import json
 import time
 from collections import Counter
 from openai import OpenAI
-from utils.vlm_utils import GPT4V, encode_image
+from utils.vlm_utils import GPT4V, Qwen, encode_image
 from utils.config import AFFORDANCES, MATERIAL_PROPERTY_PRIORS
 
 
@@ -122,7 +122,7 @@ def _query_vlm_sync(base_path, case_name, vlm_type, system_prompt, prompt, resul
     _save_results(votes, results_file_path, base_path, case_name, output_json)
 
 
-def query_vlm(base_path, case_name, vlm_type="gpt4", output_json=None):
+def query_vlm(base_path, case_name, vlm_type="qwen", output_json=None):
     material_library = "{" + ", ".join(MATERIAL_PROPERTY_PRIORS.keys()) + "}"
     affordance_library = "{" + ", ".join(AFFORDANCES) + "}"
 
@@ -208,7 +208,8 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description="Query VLM for material property prediction")
     parser.add_argument("--base_path", type=str, default="./vlm_input")
-    parser.add_argument("--vlm_type", type=str, default="gpt4", help="gpt4 | gemini | gemini_flash | qwen")
+    parser.add_argument("--vlm_type", type=str, default="qwen",
+                        help="qwen (lab server Qwen3.8-27B) | gpt4 (OpenAI gpt-4o-mini)")
     parser.add_argument("--output_json", type=str, default=None)
     args = parser.parse_args()
 

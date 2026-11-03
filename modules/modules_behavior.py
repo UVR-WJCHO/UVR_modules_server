@@ -5,8 +5,10 @@ Runs the front half of modules/behavior/main.py:
   2. query_vlm                   : query the VLM and write vlm_result.json
 The final visualization step of behavior/main.py is intentionally skipped.
 
-Requires OPENAI_API_KEY in the environment (for vlm_type="gpt4") and the
-behavior deps (pytorch3d, trimesh, imageio, matplotlib, openai).
+vlm_type="qwen" (default) queries Qwen3.8-27B on the lab's OpenAI-compatible
+server and needs LLM_BASE_URL / LLM_API_KEY; vlm_type="gpt4" queries OpenAI
+gpt-4o-mini and needs OPENAI_API_KEY. Also needs the behavior deps (pytorch3d,
+trimesh, imageio, matplotlib, openai).
 """
 import os
 import sys
@@ -42,7 +44,7 @@ def _load_api_keys(env_file):
 class BehaviorPropertyEstimator:
     """Estimate per-part material / affordance / physical properties from a GLB."""
 
-    def __init__(self, vlm_input_dir="output/vlm_input", vlm_type="gpt4", dpi=75,
+    def __init__(self, vlm_input_dir="output/vlm_input", vlm_type="qwen", dpi=75,
                  env_file=os.path.join(_REPO_ROOT, ".env")):
         self.vlm_input_dir = vlm_input_dir
         self.vlm_type = vlm_type
@@ -56,7 +58,7 @@ class BehaviorPropertyEstimator:
         vlm_input_dir overrides the default output base for this call.
         """
         # Load API keys into os.environ BEFORE importing query_vlm, because
-        # behavior/utils/vlm_utils.py reads OPENAI_API_KEY at import time.
+        # behavior/utils/vlm_utils.py reads the API keys at import time.
         _load_api_keys(self.env_file)
 
         # Imported lazily so merely importing this module does not require the
@@ -94,8 +96,8 @@ if __name__ == "__main__":
     parser.add_argument("--vlm_input_dir", type=str, default="output/vlm_input")
     parser.add_argument("--output_json", type=str, default=None,
                         help="Optional extra path to also save the result JSON")
-    parser.add_argument("--vlm_type", type=str, default="gpt4",
-                        help="gpt4 | gemini | gemini_flash | qwen")
+    parser.add_argument("--vlm_type", type=str, default="qwen",
+                        help="qwen (lab server Qwen3.8-27B) | gpt4 (OpenAI gpt-4o-mini)")
     parser.add_argument("--dpi", type=int, default=75)
     args = parser.parse_args()
 

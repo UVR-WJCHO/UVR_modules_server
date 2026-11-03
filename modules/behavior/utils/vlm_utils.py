@@ -17,6 +17,8 @@ random.seed(123)  # Set random seed to 123
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL")
+LLM_API_KEY = os.environ.get("LLM_API_KEY")
 
 
 def encode_image(image_path):
@@ -55,33 +57,28 @@ def GPT4V(image_path, prompt, system_prompt=None):
 
 
 
-# def Qwen(image_path, prompt, system_prompt=None):
+def Qwen(image_path, prompt, system_prompt=None):
+    """Qwen3.8-27B on the lab's OpenAI-compatible server (LLM_BASE_URL / LLM_API_KEY)."""
+    client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
 
-#     base64_image = encode_image(image_path)
+    base64_image = encode_image(image_path)
 
-#     messages = []
-#     if system_prompt:
-#         messages.append({"role": "system", "content": system_prompt})
-#     messages.append({
-#         "role": "user",
-#         "content": [
-#             {"type": "text", "text": prompt},
-#             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
-#         ],
-#     })
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({
+        "role": "user",
+        "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}", "detail": "low"}},
+        ],
+    })
 
-#     response = requests.post(
-#         url="https://openrouter.ai/api/v1/chat/completions",
-#         headers={
-#             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-#             "Content-Type": "application/json",
-#         },
-#         data=json.dumps({
-#             "model": "qwen/qwen-2.5-72b-instruct",
-#             "messages": messages,
-#         })
-#     )
-#     return response.json()['choices'][0]['message']['content']
+    response = client.chat.completions.create(
+        model="Qwen3.8-27B",
+        messages=messages
+    )
+    return response.choices[0].message.content.strip()
 
 # def Gemini(image_path, prompt, system_prompt=None):
 

@@ -256,6 +256,8 @@ def main():
     ap.add_argument("--session", default=None,
                     help="캡처를 쌓을 디렉토리 (기본: output/<timestamp>)")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--vlm_type", default="qwen", choices=["qwen", "gpt4"],
+                    help="behavior VLM: qwen = 연구실 서버 Qwen3.8-27B, gpt4 = OpenAI gpt-4o-mini")
     args = ap.parse_args()
 
     session_dir = Path(args.session or
@@ -281,8 +283,8 @@ def main():
     estimator = None
     if flag_behavior:
         from modules_behavior import BehaviorPropertyEstimator
-        estimator = BehaviorPropertyEstimator()
-        print("[Init] BehaviorPropertyEstimator ready")
+        estimator = BehaviorPropertyEstimator(vlm_type=args.vlm_type)
+        print(f"[Init] BehaviorPropertyEstimator ready ({args.vlm_type})")
 
     hub = HubClient(args.host, args.port,
                     result_kw=KW_MESH_RESULT, identity=IDENTITY)

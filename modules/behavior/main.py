@@ -18,7 +18,7 @@ def _load_dotenv(path):
 
 
 # Load the repo-root .env BEFORE importing query_vlm, because vlm_utils reads
-# OPENAI_API_KEY at import time. Lets standalone runs pick up the key.
+# the API keys at import time. Lets standalone runs pick up the key.
 _load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".env"))
 
 from utils.preprocess_glb_for_vlm import create_vlm_dataset_from_glb
@@ -30,7 +30,8 @@ if __name__ == "__main__":
     parser.add_argument("--glb_path", type=str, default="./data/SaturnV/SaturnV.glb", help="Path to the input .glb file")
     parser.add_argument("--vlm_input_dir", type=str, default="./vlm_input", help="Directory to save the vlm inputs")
     parser.add_argument("--output_json", type=str, default=None, help="Path to save the final JSON result (default: vlm_input_dir/<case_name>/vlm_result.json)")
-    parser.add_argument("--vlm_type", type=str, default="gpt4", help="gpt4 | gemini | gemini_flash | qwen")
+    parser.add_argument("--vlm_type", type=str, default="qwen",
+                        help="qwen (lab server Qwen3.8-27B) | gpt4 (OpenAI gpt-4o-mini)")
     parser.add_argument("--dpi", type=int, default=75, help="DPI for the VLM input images (lower = fewer tokens)")
 
     args = parser.parse_args()

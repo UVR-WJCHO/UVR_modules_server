@@ -12,9 +12,11 @@ conda activate uvr_integ
 mkdir data  # 본 경로에 .glb파일을 저장해주세요
 ```
 
-API 키 설정:
+API 키 설정 (기본 `--vlm_type qwen` 은 연구실 서버 Qwen3.8-27B, `gpt4` 는 OpenAI gpt-4o-mini):
 ```
-OPENAI_API_KEY=...       
+LLM_BASE_URL=https://ai.uvrlab.org/v1
+LLM_API_KEY=...
+OPENAI_API_KEY=...       # --vlm_type gpt4 일 때만
 ```
 
 ## 디렉토리 구조

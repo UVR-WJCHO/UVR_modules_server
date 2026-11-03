@@ -68,7 +68,7 @@ ultralytics==8.3.203
 mediapipe==0.10.14          # modules_segment imports it at module level
 
 # --- behavior properties (modules_behavior -> behavior/utils) ---
-openai==2.43.0              # VLM queries; key in .env (OPENAI_API_KEY)
+openai==2.43.0              # VLM queries (lab Qwen server and OpenAI); keys in .env
 # pytorch3d renders the views sent to the VLM; not on PyPI, see below
 
 # --- alignment (meshalignment) ---

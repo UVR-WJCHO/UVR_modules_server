@@ -144,7 +144,7 @@
 | `_calibration/rm_depth_ahat/*.bin` | HL2 깊이 센서 캘리브레이션 (연결 시 자동 생성) |
 | `output/*` | 파이프라인 실행 결과물 (rgb/depth/mesh.glb/property.json 등) |
 | `modules/behavior/vlm_input/`, `modules/behavior/data/` | behavior VLM 입력/예시 데이터 |
-| `.env` | API 키 (`OPENAI_API_KEY`) |
+| `.env` | API 키 (`LLM_BASE_URL` / `LLM_API_KEY`, `OPENAI_API_KEY`) |
 
 ---
 

@@ -55,7 +55,7 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 ├── requirements-wiseui.txt    # comm_hub + every entry point except main_metaobjrecon
 ├── requirements-metaobj.txt   # comm_hub + main_metaobjrecon
 ├── requirements.txt           # legacy/bootstrap dependency snapshot
-├── .env                       # API keys (OPENAI_API_KEY) — git-ignored
+├── .env                       # API keys (LLM_BASE_URL / LLM_API_KEY, OPENAI_API_KEY) — git-ignored
 ├── WEIGHTS.md                 # locations of all (git-ignored) model weights
 └── HOTRACK_STAGE1.md          # HoTrack controls / output layout / tuning env vars
 ```
@@ -100,10 +100,14 @@ See **[WEIGHTS.md](WEIGHTS.md)** for every path, size, and which module consumes
 
 ### API key (behavior pipeline only)
 
-The behavior property estimation calls the OpenAI API. Put your key in a repo-root `.env`:
+The behavior property estimation calls a VLM: by default Qwen3.8-27B on the lab's
+OpenAI-compatible server, or OpenAI gpt-4o-mini with `--vlm_type gpt4`. Put the keys in a
+repo-root `.env`:
 
 ```
-OPENAI_API_KEY=sk-...
+LLM_BASE_URL=https://ai.uvrlab.org/v1
+LLM_API_KEY=sk-...
+OPENAI_API_KEY=sk-...        # only for --vlm_type gpt4
 ```
 
 `.env` is git-ignored and loaded automatically by `modules_behavior.py` and `modules/behavior/main.py`.
@@ -121,7 +125,7 @@ combined GLB.
 ```bash
 conda activate uvr_integ
 python comm_hub.py --port 37001     # terminal 1
-python main_metaobjrecon.py            # terminal 2
+python main_metaobjrecon.py            # terminal 2 (--vlm_type gpt4 for OpenAI instead of the lab Qwen)
 ```
 
 Flow: HL2 frame → HoTrack segmentation → **`Space`** per unit → **`a`** per assembly
@@ -146,12 +150,13 @@ output/<YYYYMMDD_HHMMSS>/
     └── vlm/            # VLM input renders
 ```
 
-Per-part properties come from `modules/behavior` (GPT-4o-mini over per-part X-ray renders,
-needs `OPENAI_API_KEY` in the repo-root `.env`). Three of the nine properties
-(electrical conductivity, thermal expansion, fracture toughness) are not produced by that
-module yet and are filled from a per-material placeholder table in `modules_metaobj.py`;
-the run log says so. If the VLM step fails the JSON still goes out with the combiner's
-constant defaults and the failure is printed loudly.
+Per-part properties come from `modules/behavior`: a VLM over per-part X-ray renders picks
+each part's material and affordance, and that module's material table gives all nine
+property ranges. The VLM is Qwen3.8-27B on the lab server by default; `--vlm_type gpt4`
+switches to OpenAI gpt-4o-mini. Materials outside the table (non-metals) are filled from
+a placeholder table in `modules_metaobj.py`; the run log says so. If the VLM step fails
+the JSON still goes out with the combiner's constant defaults and the failure is printed
+loudly.
 
 Toggles (top of the file):
 

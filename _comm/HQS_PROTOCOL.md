@@ -1,6 +1,6 @@
 # HQS → HL2 프로토콜 (Unity 구현용)
 
-서버의 `main_all_hl2_receiver.py --hqs` 가 HL2 센서(HL2DATA, HL2_AUDIO)와 와치(WATCH_*)로 사용자 상태를
+서버의 `main_all_hl2_receiver.py --hqs` 가 HL2 센서(HL2DATA, HL2_AUDIO), 와치(WATCH_*), 폰(PHONE_ACTIVITY)으로 사용자 상태를
 계산해 comm_hub 로 두 종류를 올린다. HL2 앱은 이 둘을 받기만 하면 된다.
 
 | keyword | 본문 | 용도 |
@@ -83,11 +83,12 @@ HL2 쪽 처리:
 | `physical` | `activity` | 와치 활동 STILL 0.0, WALKING 0.5, RUNNING 1.0 | 와치 활동이 바뀔 때 |
 | `physical` | `hqs` | HL2 머리 이동이 걷기면 0.5, 아니면 0.0 | 와치가 없을 때만. 값이 바뀔 때 |
 | `social` | `combined` | 0~1 연속값. 아래 3.1 | 마지막으로 보낸 값과 0.05 이상 달라질 때 |
-| `digital` | — | — | 아직 보내지 않는다 |
+| `digital` | `phone_touch` | 0~1, 0.1 단위. 아래 3.3 | 값이 바뀔 때(폰 보고마다, 최대 약 1 Hz) |
 
 - 매번 값이 오는 게 아니라 바뀔 때 온다. HL2 는 type 별 마지막 값을 들고 있다가 새 값이 오면 바꾼다.
 - 와치(서버의 main_devicebridge)가 없거나 5 초 넘게 끊기면 emotion 은 오지 않고, physical 은 `source: "hqs"` 로 온다.
   와치가 돌아오면 다음 와치 활동 변화부터 다시 `activity` 로 온다.
+- 폰 앱의 터치 보고가 3 초 넘게 끊기면 digital 은 오지 않는다. 돌아오면 0 부터 다시 쌓여 올라간다.
 - Unity `JsonUtility.FromJson` 으로 그대로 읽힌다(type, source: string / value: float / timestamp: double /
   highlight: bool).
 
@@ -126,6 +127,19 @@ social = 0.5 x (face + voice)          각 항 0~1, 결과 0~1 연속값
 | `emotion` | 0.4 | 3 s | 심박 구간이 한 칸 이상 바뀜(0.8 ↔ 1.0 은 제외) |
 | `physical` | 0.5 | 3 s | 활동이 한 단계 이상 바뀜 |
 | `social` | 0.3 | 3 s | 3 초 안에 0.3 이상 바뀜 |
+| `digital` | 0.5 | 5 s | 폰을 쓰기 시작하거나 멈춘 상태가 5 초 이어짐(digital 은 초당 최대 0.1 씩 움직인다) |
+
+### 3.3 digital 계산
+
+```
+digital = 최근 폰 보고 10 개(약 10 초) 중 터치가 있던 보고의 수 / 10
+```
+
+- 폰 앱이 1 초마다 그 1 초 동안의 터치 요약을 comm_hub(`PHONE_ACTIVITY`)로 올린다. 손가락이 화면에 조금이라도
+  닿았으면(`active_ms > 0`) 그 1 초는 "터치 있음"이다. 탭·스크롤·타이핑을 구분하지 않는다.
+- 대략: 계속 스크롤하거나 타이핑 ≈ 0.8~1.0, 2 초에 한 번 탭 ≈ 0.5, 내려놓음 = 0.
+- 터치 없이 화면만 보는 사용(영상 시청, 스크롤 없는 읽기)은 0 이다.
+- 폰이 붙은 직후나 끊겼다 돌아온 직후는 보고가 10 개가 될 때까지 없는 것을 0 으로 세므로 천천히 올라간다.
 
 ## 4. HL2 앱이 이미 해 주고 있어야 하는 것
 

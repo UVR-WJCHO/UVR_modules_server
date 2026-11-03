@@ -18,7 +18,8 @@
            않는다. 상태 이름이 곧 HL2 에 보내는 모드이고, 어디에도 들지 않으면 NONE 이다.
            새 상태는 STATES 에 한 줄 더한다.
   ④ 패널   HQS 패널의 차원 값(Emotional / Physical / Social / Digital, 0~1)을 낸다(HQSPanel).
-           와치 신호와 위의 face·voice 요소를 받아 값이 바뀔 때 이벤트를 하나 내고, 수신기가 HL2_UI 로 올린다.
+           와치 신호, 폰 터치 요약, 위의 face·voice 요소를 받아 값이 바뀔 때 이벤트를 하나 내고, 수신기가
+           HL2_UI 로 올린다.
            짧은 시간에 크게 바뀐 이벤트에는 type 별로 highlight 를 붙인다.
 
 좌표계는 HL2DATA 그대로다(Unity 월드, +Y 위, m). 얼굴 거리는 depth 가 있으면 depth 로, 없으면
@@ -413,9 +414,12 @@ def draw(img: np.ndarray, r: HQSResult) -> None:
 ACTIVITY_VALUE = {"STILL": 0.0, "WALKING": 0.5, "RUNNING": 1.0}
 WATCH_TIMEOUT_S = 5.0     # 와치 메시지(심박은 약 1 Hz)가 이만큼 끊기면 와치가 없다고 본다(bridge 미실행 포함)
 SOCIAL_STEP = 0.05        # social 은 연속값이라 마지막으로 보낸 값과 이만큼 이상 달라질 때만 보낸다
+PHONE_WINDOW = 10         # 폰 보고(약 1 s 마다 하나) 수. digital = 최근 이만큼 중 터치가 있던 보고의 비율
+PHONE_TIMEOUT_S = 3.0     # 폰 보고가 이만큼 끊기면 폰이 없다고 본다
 # type: (D, W s). 새 값이 최근 W 초 동안의 값과 D 이상 다르면 그 이벤트에 highlight 를 붙인다.
-# emotion 0.4 = 심박 구간 한 칸(0.8 <-> 1.0 은 제외), physical 0.5 = 활동 한 단계, social 0.3 = 연속값
-HIGHLIGHT = {"emotion": (0.4, 3.0), "physical": (0.5, 3.0), "social": (0.3, 3.0)}
+# emotion 0.4 = 심박 구간 한 칸(0.8 <-> 1.0 은 제외), physical 0.5 = 활동 한 단계, social 0.3 = 연속값,
+# digital 0.5 = 창의 절반. digital 은 보고마다 최대 0.1 씩만 움직이므로 W 는 D x 10 s 이상이어야 켜질 수 있다
+HIGHLIGHT = {"emotion": (0.4, 3.0), "physical": (0.5, 3.0), "social": (0.3, 3.0), "digital": (0.5, 5.0)}
 
 
 class HQSPanel:
@@ -426,7 +430,9 @@ class HQSPanel:
     큰 쪽이다. 마지막으로 보낸 값과 SOCIAL_STEP 이상 달라질 때 낸다.
     와치가 없으면(WATCH_TIMEOUT_S) 와치 VAD 는 버리고, Physical 은 HQS walking 요소로 대신한다
     (걷기 0.5 / 아니면 0.0, source "hqs"). Emotion 은 심박뿐이라 대신할 것이 없다.
-    Digital 은 아직 규칙이 없다. 하이라이트는 HIGHLIGHT 로 type 마다 따로 판정한다.
+    Digital 은 폰 터치(on_phone)만 본다. 최근 PHONE_WINDOW 개 보고 중 터치가 있던 보고의 비율이고, 바뀔 때
+    낸다. 터치 없이 화면만 보는 사용은 잡지 못한다. 폰 보고가 PHONE_TIMEOUT_S 끊기면 내지 않는다.
+    하이라이트는 HIGHLIGHT 로 type 마다 따로 판정한다.
     snapshot() 은 지금 HL2 에 나가 있는 값이다(프로파일용).
     """
 
@@ -441,6 +447,10 @@ class HQSPanel:
         self._physical_hqs: Optional[float] = None
         self._emotion = self._physical = self._bpm = None   # 마지막으로 낸 값과 그 심박
         self._t_hl2 = 0.0                                   # 마지막 on_hqs 시각
+        self._touch = deque(maxlen=PHONE_WINDOW)            # 폰 보고마다 터치가 있었는지
+        self._digital: Optional[float] = None
+        self._t_phone = 0.0
+        self._phone_ok = False
 
     def on_watch(self, kind: str, msg: Dict) -> Optional[Dict]:
         """kind: "hr" (WATCH_HR) / "activity" (WATCH_ACTIVITY) / "vad" (WATCH_VAD)."""
@@ -466,6 +476,24 @@ class HQSPanel:
                 self._vad.append((time.time(), bool(msg["is_speaking"])))
         return None
 
+    def on_phone(self, msg: Dict) -> Optional[Dict]:
+        """PHONE_ACTIVITY 보고 하나. 보고가 PHONE_WINDOW 개 미만이면 없는 것은 터치 없음으로 센다."""
+        if "active_ms" not in msg:
+            return None
+        with self._lock:
+            now = time.time()
+            if now - self._t_phone >= PHONE_TIMEOUT_S:      # 처음이거나 끊겼다 돌아옴: 0 부터 다시 쌓는다
+                self._touch.clear()
+                self._hist.pop("digital", None)
+                print("[HQS] 폰 터치 수신 중", flush=True)
+            self._t_phone, self._phone_ok = now, True
+            self._touch.append(float(msg["active_ms"]) > 0)
+            v = sum(self._touch) / PHONE_WINDOW
+            if v == self._digital:
+                return None
+            self._digital = v
+            return self._event("digital", "phone_touch", v, now)
+
     def on_hqs(self, r: HQSResult) -> List[Dict]:
         with self._lock:
             now = self._t_hl2 = time.time()
@@ -476,6 +504,10 @@ class HQSPanel:
                 print("[HQS] 와치 수신 중" if ok else
                       f"[HQS] 와치 데이터가 {WATCH_TIMEOUT_S:.0f} s 없다(main_devicebridge 확인). "
                       "physical 은 HL2 머리 이동으로 대신하고 emotion 은 보내지 않는다", flush=True)
+            if self._phone_ok and now - self._t_phone >= PHONE_TIMEOUT_S:
+                self._phone_ok = False
+                print(f"[HQS] 폰 보고(PHONE_ACTIVITY)가 {PHONE_TIMEOUT_S:.0f} s 없다. digital 은 보내지 않는다",
+                      flush=True)
             events = []
             voice = max(r.primitives["voice"], self._watch_voice(now) if ok else 0.0)
             v = 0.5 * (r.primitives["face"] + voice)
@@ -520,9 +552,12 @@ class HQSPanel:
     def snapshot(self) -> Dict:
         """패널 값(없으면 None)과 bpm, 와치 연결 여부, 마지막 HL2DATA 처리 시각(t_hl2)."""
         with self._lock:
-            ok = time.time() - self._t_watch < WATCH_TIMEOUT_S
+            now = time.time()
+            ok = now - self._t_watch < WATCH_TIMEOUT_S
+            phone = now - self._t_phone < PHONE_TIMEOUT_S
             return {"t_hl2": self._t_hl2, "watch": ok, "emotion": self._emotion if ok else None,
-                    "physical": self._physical, "social": self._social, "digital": None,
+                    "physical": self._physical, "social": self._social,
+                    "digital": self._digital if phone else None,
                     "bpm": self._bpm if ok else None}
 
 

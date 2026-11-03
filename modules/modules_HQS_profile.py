@@ -10,7 +10,7 @@
       watch_s                   그중 와치가 붙어 있던 초
       mode                      모드(FOCUS / MOVING / TALKING / NONE ...)별 초
       emotion physical social digital bpm
-                                [n, 합, 제곱합]. 값이 없던 초(와치 없음, digital 미정 등)는 세지 않는다
+                                [n, 합, 제곱합]. 값이 없던 초(와치·폰 없음 등)는 세지 않는다
 
 [n, 합, 제곱합] 은 달·칸끼리 더하기만 하면 합쳐지므로 원하는 기간·시간대의 평균과 분산을 바로 낸다.
 크기는 기록 기간과 무관하게 최대 (KEEP_MONTHS + 1) x 48 칸, 수백 KB 이하다.

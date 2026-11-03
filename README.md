@@ -252,6 +252,10 @@ part of the panel and the phone link come from `main_devicebridge.py`:
 | `HL2_UI` social | HL2 face and HL2 microphone | additionally the watch VAD |
 | phone ↔ HL2 (`PHONE_TO_HL2` / `HL2_TO_PHONE`) | unavailable | available |
 
+`HL2_UI` digital does not depend on the bridge: the phone app sends a touch summary every second
+(`PHONE_ACTIVITY`) straight to `comm_hub`, and digital is the share of the last ten seconds with a
+touch. It is not sent while those reports are missing for more than 3 s.
+
 Run the bridge whenever the panel is expected to reflect watch data or the phone app is in
 use. Without it the receiver keeps running; after 5 s without watch messages it logs a
 warning and switches to the substitutes above, and it returns to the watch values once

@@ -22,7 +22,7 @@ DATA_REPLY)을 사용하며, hl2_data_pb2(HL2SensorPacket)로 depth 및 확장 �
 사용자 상태 추정(modules/modules_HQS.py):
     python main_all_hl2_receiver.py --hqs                         # 상태·요소를 RGB 창에 표시
     --hqs 는 상태를 HL2_MODE(FOCUS / MOVING / TALKING / NONE 문자열)로 1 초마다 올린다.
-    또 WATCH_HR / WATCH_ACTIVITY / WATCH_VAD 를 받아 HQS 패널 값(JSON)을 HL2_UI 로 올린다.
+    또 WATCH_HR / WATCH_ACTIVITY / WATCH_VAD / PHONE_ACTIVITY 를 받아 HQS 패널 값(JSON)을 HL2_UI 로 올린다.
     python main_all_hl2_receiver.py --hqs --start-posture standing
     python main_all_hl2_receiver.py --hqs --general               # 상태 우선순위 없이 점수로 고른다
     python main_all_hl2_receiver.py --hqs --profile output/hqs/profiles/A.json   # A 의 프로파일에 쌓는다
@@ -408,13 +408,14 @@ class UiSender:
 
 
 def watch_loop(hub, kind, panel, ui):
-    """와치 채널 하나(WATCH_HR / WATCH_ACTIVITY / WATCH_VAD)를 받아 패널 이벤트로 바꿔 올린다."""
+    """기기 채널 하나(WATCH_HR / WATCH_ACTIVITY / WATCH_VAD / PHONE_ACTIVITY)를 받아 패널 이벤트로 바꿔 올린다."""
     while True:
         data = hub.get_latest(timeout=1.0)
         if data is None:
             continue
         try:
-            ev = panel.on_watch(kind, json.loads(data))
+            msg = json.loads(data)
+            ev = panel.on_phone(msg) if kind == "phone" else panel.on_watch(kind, msg)
         except (ValueError, TypeError, AttributeError) as e:      # 깨진 메시지 하나로 채널을 멈추지 않는다
             print(f"[HQS] {kind} 메시지 무시: {e}", flush=True)
             continue
@@ -440,7 +441,8 @@ def run(args):
     if args.hqs:
         from modules_HQS import HQS, HQSPanel
         from modules_HQS_profile import DEFAULT_PROFILE, HQSProfile, locate
-        from hub_client import HubClient, KW_HL2_MODE, KW_HL2_UI, KW_WATCH_HR, KW_WATCH_ACTIVITY, KW_WATCH_VAD
+        from hub_client import (HubClient, KW_HL2_MODE, KW_HL2_UI, KW_PHONE_ACTIVITY, KW_WATCH_ACTIVITY,
+                                KW_WATCH_HR, KW_WATCH_VAD)
         hqs = HQS(start_posture=args.start_posture, general=args.general)
         panel = HQSPanel()
         profile = HQSProfile(args.profile or DEFAULT_PROFILE, locate())
@@ -464,7 +466,8 @@ def run(args):
         threading.Thread(target=mode_loop, args=(mode_hub, hqs), daemon=True).start()
         threading.Thread(target=profile_loop, args=(profile, hqs, panel), daemon=True).start()
         # 수신 등록은 identity 마다 하나이고 HubClient 는 keyword 를 구분해 주지 않아 채널마다 따로 둔다
-        for kw, kind in ((KW_WATCH_HR, "hr"), (KW_WATCH_ACTIVITY, "activity"), (KW_WATCH_VAD, "vad")):
+        for kw, kind in ((KW_WATCH_HR, "hr"), (KW_WATCH_ACTIVITY, "activity"), (KW_WATCH_VAD, "vad"),
+                         (KW_PHONE_ACTIVITY, "phone")):
             hub = HubClient(args.host, args.port, recv_kw=kw, identity=identity + b"_" + kw, queue_size=32)
             hubs.append(hub)
             threading.Thread(target=watch_loop, args=(hub, kind, panel, ui), daemon=True).start()

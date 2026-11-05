@@ -365,33 +365,32 @@ class InteractiveHoTrackSegmentor:
         hand-object match instead of using list order.
         """
         oid = self.selected_id
-        if oid is None:
-            matches = (self.current_result.get("detections") or {}).get("target_matches", [])
-            ranked = []
-            for candidate_id, mask in self.current_masks.items():
-                if candidate_id < 100 or not np.any(mask):
+        matches = (self.current_result.get("detections") or {}).get("target_matches", [])
+        scores = {}
+        for candidate_id, mask in self.current_masks.items():
+            mask_area = int(np.count_nonzero(mask))
+            if candidate_id < 100 or not mask_area:
+                continue
+            for match in matches:
+                box = match.get("object_bbox_xyxy")
+                if not isinstance(box, (list, tuple)) or len(box) != 4:
                     continue
-                for match in matches:
-                    box = match.get("object_bbox_xyxy")
-                    if not isinstance(box, (list, tuple)) or len(box) != 4:
-                        continue
-                    x1, y1, x2, y2 = [int(value) for value in box]
-                    height, width = mask.shape
-                    x1, x2 = max(0, min(width, x1)), max(0, min(width, x2))
-                    y1, y2 = max(0, min(height, y1)), max(0, min(height, y2))
-                    if x2 <= x1 or y2 <= y1:
-                        continue
-                    overlap = int(np.count_nonzero(mask[y1:y2, x1:x2]))
-                    union = int(np.count_nonzero(mask)) + (x2 - x1) * (y2 - y1) - overlap
-                    if overlap:
-                        ranked.append((overlap / max(1, union), -int(candidate_id)))
-            if ranked:
-                oid = -max(ranked)[1]
-            else:
-                visible = [key for key, mask in self.current_masks.items()
-                           if key >= 100 and np.any(mask)]
-                if len(visible) == 1:
-                    oid = visible[0]
+                x1, y1, x2, y2 = [int(value) for value in box]
+                height, width = mask.shape
+                x1, x2 = max(0, min(width, x1)), max(0, min(width, x2))
+                y1, y2 = max(0, min(height, y1)), max(0, min(height, y2))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                overlap = int(np.count_nonzero(mask[y1:y2, x1:x2]))
+                box_area = (x2 - x1) * (y2 - y1)
+                # A few hand/background pixels inside a box are not a match.
+                if overlap / mask_area < 0.25 or overlap / box_area < 0.25:
+                    continue
+                score = overlap / max(1, mask_area + box_area - overlap)
+                scores[int(candidate_id)] = max(scores.get(int(candidate_id), 0.0), score)
+        self.current_result["capture_match_scores"] = scores
+        if oid is None and scores:
+            oid = max(scores, key=lambda key: (scores[key], -key))
         self.current_result["capture_object_id"] = oid
         mask = self.current_masks.get(oid)
         if mask is None or not np.any(mask):

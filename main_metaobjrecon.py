@@ -131,26 +131,29 @@ def clear_gpu_memory():
 
 
 # --- 정합 + 합본 ---
-TARGET_LOST_FRAMES = 15   # 고정한 물체가 이만큼 연속으로 안 보이면 놓는다 (25 fps 에서 약 0.6 s)
+TARGET_LOST_FRAMES = 15   # 다른 유효한 후보도 없을 때만 적용하는 처리 프레임 수
+TARGET_SWITCH_FRAMES = 3
+TARGET_SWITCH_MARGIN = 0.10
 
 
 class CaptureTarget:
-    """HoTrack 창을 클릭하지 않아도 캡처 대상을 한 물체로 유지한다.
+    """Keep a stable capture target without delaying a valid replacement.
 
-    HL2 를 쓴 사람은 서버의 HoTrack 창을 클릭할 수 없다. 선택이 없으면 get_capture_mask()
-    가 매 프레임 새로 고르는데, 물체를 쥐고 가만히 있어도 HoTrack 이 두 번째 트랙을 1 초
-    간격으로 만들었다 지우면 그 프레임마다 고르지 못한다. 측정해 보니 프레임의 60 % 가
-    그랬고, Segmentation 창과 키 입력이 그만큼 끊겼다. 클릭은 selected_id 를 정하는 것이
-    전부라, 처음 정해진 대상을 같은 방식으로 고정한다. 놓는 경우는 셋이다.
-      - 고정한 물체가 TARGET_LOST_FRAMES 프레임 연속 안 보일 때
-      - 고정한 물체가 보이는데 손-물체 매칭이 다른 물체를 가리킬 때 (그쪽으로 옮긴다)
-      - 캡처(SPACE / a) 직후. 다음 유닛은 다른 물체를 들고 찍는다
-    사람이 직접 클릭한 선택도 같은 규칙으로 다룬다.
+    Overlapping tracks are not evidence of a different physical object. A visible
+    target changes only after a distinct, better hand-matched candidate persists.
     """
 
     def __init__(self, seg):
         self.seg = seg
         self.missed = 0
+        self.pending = None
+        self.pending_frames = 0
+        self.pending_frame = None
+
+    def _clear_pending(self):
+        self.pending = None
+        self.pending_frames = 0
+        self.pending_frame = None
 
     def mask(self):
         seg = self.seg
@@ -159,19 +162,50 @@ class CaptureTarget:
         seg.selected_id = None
         free = seg.get_capture_mask()
         free_oid = seg.current_result.get("capture_object_id") if free is not None else None
+        scores = seg.current_result.get("capture_match_scores", {})
         if locked is None:
             if free_oid is not None:
                 seg.selected_id = free_oid
+                self.missed = 0
+                self._clear_pending()
                 print(f"[Target] 캡처 대상 고정: id {free_oid}", flush=True)
             return free
-        matched = bool((seg.current_result.get("detections") or {}).get("target_matches"))
         locked_mask = seg.current_masks.get(locked)
-        if (matched and locked_mask is not None and np.any(locked_mask)
-                and free_oid is not None and free_oid != locked):
-            seg.selected_id = free_oid
-            self.missed = 0
-            print(f"[Target] 손이 다른 물체를 잡음: id {locked} -> {free_oid}", flush=True)
-            return free
+        locked_visible = locked_mask is not None and np.any(locked_mask)
+        if free_oid is not None and free_oid != locked:
+            # A missing old mask must not hold a ready new target for 15 frames.
+            switch = not locked_visible
+            if locked_visible:
+                candidate_mask = seg.current_masks[free_oid].astype(bool)
+                current_mask = locked_mask.astype(bool)
+                intersection = np.count_nonzero(candidate_mask & current_mask)
+                smaller = min(np.count_nonzero(candidate_mask), np.count_nonzero(current_mask))
+                union = np.count_nonzero(candidate_mask | current_mask)
+                duplicate = (intersection / max(1, union) >= 0.5
+                             or intersection / max(1, smaller) >= 0.8)
+                better = scores.get(free_oid, 0.0) >= scores.get(locked, 0.0) + TARGET_SWITCH_MARGIN
+                if duplicate or not better:
+                    self._clear_pending()
+                else:
+                    frame = seg.current_result.get("frame_idx")
+                    if self.pending != free_oid:
+                        self._clear_pending()
+                        self.pending = free_oid
+                    elif (frame is not None and self.pending_frame is not None
+                          and frame not in (self.pending_frame, self.pending_frame + 1)):
+                        self.pending_frames = 0
+                    if frame is None or frame != self.pending_frame:
+                        self.pending_frames += 1
+                        self.pending_frame = frame
+                    switch = self.pending_frames >= TARGET_SWITCH_FRAMES
+            if switch:
+                seg.selected_id = free_oid
+                self.missed = 0
+                self._clear_pending()
+                print(f"[Target] 캡처 대상 변경: id {locked} -> {free_oid}", flush=True)
+                return free
+        else:
+            self._clear_pending()
         seg.selected_id = locked
         mask = seg.get_capture_mask()
         if mask is not None:
@@ -181,12 +215,14 @@ class CaptureTarget:
         if self.missed >= TARGET_LOST_FRAMES:
             seg.selected_id = None
             self.missed = 0
-            print(f"[Target] id {locked} 가 사라져 고정을 풂", flush=True)
+            self._clear_pending()
+            print(f"[Target] id {locked} 마스크 미관측으로 고정을 풂", flush=True)
         return None
 
     def release(self):
         self.seg.selected_id = None
         self.missed = 0
+        self._clear_pending()
 
 
 def assembly_label(units):

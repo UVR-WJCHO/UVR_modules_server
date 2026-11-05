@@ -556,6 +556,8 @@ class Hotrack:
         self.mask_history: Dict[int, deque] = {}  # obj_id -> deque of (frame_idx, mask)
         self.mask_history_length: int = 5  # Keep last N frames for temporal ID consistency
         self._prev_tracked_masks: Dict[int, np.ndarray] = {}
+        self._tracking_only_missing: Dict[int, int] = {}
+        self._tracking_only_appearance: Dict[int, np.ndarray] = {}
         # Multi-component handling (objects only)
         self.detect_add_ioa_threshold: float = 0.35
         self._current_target_boxes: List[List[int]] = []
@@ -917,6 +919,8 @@ class Hotrack:
         self._prev_gray = None
         self._prev_fg_mask = None
         self._prev_tracked_masks = {}
+        self._tracking_only_missing = {}
+        self._tracking_only_appearance = {}
         self._frame_history = deque(maxlen=self.backfill_window)
         self._frame_idx_history = deque(maxlen=self.backfill_window)
         self._tracked_masks_history = deque(maxlen=self.backfill_window)
@@ -7706,6 +7710,23 @@ class Hotrack:
             reason=reason,
         )
 
+    @staticmethod
+    def _tracking_appearance(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """Small colour signature used only to validate a resumed/duplicate ID."""
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1], mask.astype(np.uint8), [16, 4], [0, 180, 0, 256])
+        return hist / max(float(hist.sum()), 1.0)
+
+    def _retire_tracking_only_object(self, oid: int, reason: str) -> None:
+        self.all_ids, _ = self.sam2_tracker.remove_object(
+            self.inference_state, int(oid), strict=False, need_output=False
+        )
+        self._tracking_only_missing.pop(int(oid), None)
+        self._tracking_only_appearance.pop(int(oid), None)
+        self.mask_history.pop(int(oid), None)
+        self.events.append({"type": "object_retired", "frame": int(self.frame_idx),
+                            "obj_id": int(oid), "reason": reason})
+
     def _process_frame_tracking_only(
         self,
         image_bgr: np.ndarray,
@@ -7749,6 +7770,9 @@ class Hotrack:
                 max_object_area_ratio=float(self.max_obj_area_ratio),
                 max_object_vs_hand_ratio=float(self.max_obj_vs_hand_ratio),
                 track_hand_masks=False,
+                # A mug held by its handle, or a cap held at the brim, can be
+                # much larger than the visible hand. Keep the image-area cap.
+                enforce_hand_relative_area_cap=False,
                 require_target_contact_match=True,
             ),
             target_contact_code=str(target_contact_code),
@@ -7757,33 +7781,92 @@ class Hotrack:
         tracked_masks: Dict[int, np.ndarray] = {}
         tracked_boxes: Dict[int, List[int]] = {}
         t_track = time.perf_counter()
+        missing = self._tracking_only_missing
+        appearances = self._tracking_only_appearance
+        retire = {}
         if self.all_ids:
             _, self.all_ids, logits, self.inference_state = self.sam2_tracker.get_mask(
                 self.inference_state, self.frame_idx
             )
             if logits is not None:
                 for index, oid in enumerate(self.all_ids):
-                    if index >= len(logits) or int(oid) < 100:
+                    if int(oid) < 100:
+                        continue
+                    if index >= len(logits):
+                        missing[int(oid)] = missing.get(int(oid), 0) + 1
+                        if missing[int(oid)] >= 3:
+                            retire[int(oid)] = "mask_missing"
                         continue
                     mask = self._logits_to_bool_mask(logits[index], height, width)
-                    if np.count_nonzero(mask) >= self.min_mask_area:
-                        tracked_masks[int(oid)] = mask
-                        tracked_boxes[int(oid)] = self._get_mask_bbox(mask)
+                    oid = int(oid)
+                    valid = np.count_nonzero(mask) >= self.min_mask_area
+                    # Never let an old, missing track resume on a different
+                    # looking object just because SAM2 predicts a mask there.
+                    if valid and missing.get(oid, 0) and oid in appearances:
+                        distance = cv2.compareHist(appearances[oid], self._tracking_appearance(image_bgr, mask),
+                                                   cv2.HISTCMP_BHATTACHARYYA)
+                        if distance > 0.7:
+                            retire[oid] = "appearance_changed_after_loss"
+                            continue
+                    if valid:
+                        missing[oid] = 0
+                        tracked_masks[oid] = mask
+                        tracked_boxes[oid] = self._get_mask_bbox(mask)
+                    else:
+                        missing[oid] = missing.get(oid, 0) + 1
+                        if missing[oid] >= 3:
+                            retire[oid] = "mask_missing"
+            else:
+                for oid in self.all_ids:
+                    missing[int(oid)] = missing.get(int(oid), 0) + 1
+                    if missing[int(oid)] >= 3:
+                        retire[int(oid)] = "mask_missing"
+        # Resolve two propagated IDs on the same image support before their
+        # boxes can suppress a new candidate or compete for capture selection.
+        ids = sorted(tracked_masks)
+        for index, left in enumerate(ids):
+            if left in retire:
+                continue
+            for right in ids[index + 1:]:
+                if right in retire:
+                    continue
+                a, b = tracked_masks[left], tracked_masks[right]
+                intersection = np.count_nonzero(a & b)
+                union = np.count_nonzero(a | b)
+                if intersection / max(1, union) < 0.7:
+                    continue
+                def consistency(oid):
+                    if oid not in appearances:
+                        return 1.0
+                    return cv2.compareHist(appearances[oid], self._tracking_appearance(image_bgr, tracked_masks[oid]),
+                                           cv2.HISTCMP_BHATTACHARYYA)
+                keep = min((left, right), key=lambda oid: (consistency(oid), oid))
+                drop = right if keep == left else left
+                retire[drop] = "duplicate_mask"
+                if drop == left:
+                    break
+        for oid, reason in retire.items():
+            self._retire_tracking_only_object(oid, reason)
+            tracked_masks.pop(oid, None)
+            tracked_boxes.pop(oid, None)
         timing["sam2_tracking"] = time.perf_counter() - t_track
         new_objects: List[int] = []
         rejections = list(detection.rejection_events)
-        hand_area_ref = max((float(np.sum(m)) for m in detection.current_hand_proxy_masks), default=0.0)
         t_objects = time.perf_counter()
         for box in detection.target_boxes:
             # ObservationStage.run: avoid re-prompting an already propagated object.
             bx1, by1, bx2, by2 = box
             box_area = float(max(1, (bx2 - bx1) * (by2 - by1)))
             existing_match = False
-            for existing_box in tracked_boxes.values():
+            for existing_id, existing_box in tracked_boxes.items():
                 ex1, ey1, ex2, ey2 = existing_box
                 intersection = float(max(0, min(bx2, ex2) - max(bx1, ex1)) * max(0, min(by2, ey2) - max(by1, ey1)))
+                support = self._project_mask(tracked_masks[existing_id], box)
+                # An oversized/drifting bounding rectangle alone is not a
+                # reason to call a newly detected object already registered.
+                support_ratio = np.count_nonzero(support) / box_area
                 if (bbox_iou(box, existing_box) >= self.existing_object_box_iou_skip_th
-                        or intersection / box_area >= self.existing_object_box_cover_skip_th):
+                        or intersection / box_area >= self.existing_object_box_cover_skip_th) and support_ratio >= 0.5:
                     existing_match = True
                     break
             if existing_match:
@@ -7802,6 +7885,9 @@ class Hotrack:
                 if logits is None or object_id not in self.all_ids:
                     continue
                 mask = self._logits_to_bool_mask(logits[self.all_ids.index(object_id)], height, width)
+                predictor_mask = mask
+                mask = self._project_mask(mask, box)
+                seed_mask = mask.copy()
                 # Same positive interior-point refinement as the source observation stage.
                 if self.enable_prompt_refinement and np.any(mask):
                     centers = self._mask_uniform_points(mask, max_points=self.dt_point_count, min_dist=self.dt_point_min_dist)
@@ -7814,16 +7900,17 @@ class Hotrack:
                             obj_id=object_id,
                             points=np.asarray(centers, dtype=np.float32),
                             labels=np.ones(len(centers), dtype=np.int32),
+                            box=np.asarray(box, dtype=np.float32),
                             clear_old_points=True,
                         )
                         if refined is not None and object_id in self.all_ids:
                             refined_mask = self._logits_to_bool_mask(refined[self.all_ids.index(object_id)], height, width)
-                            if np.any(refined_mask):
-                                mask = refined_mask
+                            predictor_mask = refined_mask
+                            refined_mask = self._project_mask(refined_mask, box)
+                            mask = refined_mask if np.count_nonzero(refined_mask) >= self.min_mask_area else seed_mask
                 area = float(np.count_nonzero(mask))
                 if (area < self.min_mask_area
-                        or area / float(height * width) > self.max_obj_area_ratio
-                        or (hand_area_ref > 0 and area / hand_area_ref > self.max_obj_vs_hand_ratio)):
+                        or area / float(height * width) > self.max_obj_area_ratio):
                     rejections.append({"obj_id": object_id, "reason": "candidate_size"})
                     continue
                 admission = self.detector_projected_identity_admission(
@@ -7831,13 +7918,14 @@ class Hotrack:
                     detector_box=box,
                     existing_masks=tracked_masks,
                     overlap_threshold=float(iou_threshold),
+                    always_project=True,
                 )
                 if not admission.creates_new_identity or np.count_nonzero(admission.identity_mask) < self.min_mask_area:
                     rejections.append({"obj_id": object_id, "reason": admission.reason})
                     continue
                 mask = admission.identity_mask
                 # Keep the admitted support and the SAM2 memory in agreement.
-                if not np.array_equal(mask, admission.event_mask):
+                if not np.array_equal(mask, predictor_mask):
                     mask_result = self.sam2_tracker.add_new_mask(
                         self.inference_state, frame_idx=self.frame_idx, obj_id=object_id, mask=mask
                     )
@@ -7846,6 +7934,8 @@ class Hotrack:
                         self.inference_state = mask_result[3]
                 tracked_masks[object_id] = mask
                 tracked_boxes[object_id] = self._get_mask_bbox(mask)
+                missing[object_id] = 0
+                appearances[object_id] = self._tracking_appearance(image_bgr, mask)
                 new_objects.append(object_id)
                 self.events.append({"type": "new_object", "frame": int(self.frame_idx), "obj_id": object_id})
                 accepted = True

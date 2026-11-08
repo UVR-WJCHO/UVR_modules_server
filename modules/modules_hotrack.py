@@ -252,6 +252,10 @@ class InteractiveHoTrackSegmentor:
         self.hotrack.set_output_dirs(str(self.output_dir), self.video_name, image_dir=str(_abs_repo_path(image_dir)))
         self.hotrack.reset_tracker_state()
 
+        warmup_seconds = self.hotrack.warmup_tracking_only()
+        if warmup_seconds:
+            print(f"[HoTrack] CUDA inference ready ({warmup_seconds:.2f}s warmup; temporary state discarded)")
+
         self._write_meta()
         if self.interactive_window:
             try:

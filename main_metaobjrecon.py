@@ -139,8 +139,9 @@ TARGET_SWITCH_MARGIN = 0.10
 class CaptureTarget:
     """Keep a stable capture target without delaying a valid replacement.
 
-    Overlapping tracks are not evidence of a different physical object. A visible
-    target changes only after a distinct, better hand-matched candidate persists.
+    Overlapping tracks are not evidence of a different physical object. A new,
+    distinct, better hand-matched identity takes priority; existing candidates
+    require repeated evidence before replacing a visible target.
     """
 
     def __init__(self, seg):
@@ -185,6 +186,13 @@ class CaptureTarget:
                              or intersection / max(1, smaller) >= 0.8)
                 better = scores.get(free_oid, 0.0) >= scores.get(locked, 0.0) + TARGET_SWITCH_MARGIN
                 if duplicate or not better:
+                    self._clear_pending()
+                elif free_oid in seg.current_result.get("new_objects", []):
+                    # A distinct, newly registered handheld object with a
+                    # clearly better match is ready now. Requiring repeated
+                    # detector hits can hide it throughout the next occlusion.
+                    # Keep debounce for switches between existing identities.
+                    switch = True
                     self._clear_pending()
                 else:
                     frame = seg.current_result.get("frame_idx")
@@ -379,11 +387,14 @@ def main():
             frame_idx += 1
             obj_mask = (target.mask() if flag_interactive_hotrack
                         else result_masks[0] if len(result_masks) else None)
+            # Always refresh: leaving the previous image on screen when no
+            # mask exists makes a lost/occluded target look like stale tracking.
+            segmentation = (np.where(obj_mask[..., None] == 1, color, 3)
+                            if obj_mask is not None else np.full_like(color, 3))
+            cv2.imshow("Segmentation", segmentation)
+            cv2.waitKey(1)
             if obj_mask is None:
                 continue
-
-            cv2.imshow("Segmentation", np.where(obj_mask[..., None] == 1, color, 3))
-            cv2.waitKey(1)
 
             key = read_key_nonblocking(timeout=0.01)
             if not key:

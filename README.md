@@ -249,7 +249,7 @@ part of the panel and the phone link come from `main_devicebridge.py`:
 | `HL2_MODE` | complete | unchanged |
 | `HL2_UI` emotion | not sent | watch heart rate |
 | `HL2_UI` physical | substitute from HL2 head motion (`source: "hqs"`) | watch activity |
-| `HL2_UI` social | HL2 face and HL2 microphone | additionally the watch VAD |
+| `HL2_UI` social | HL2 face and HL2 microphone | unchanged (the watch VAD only goes into the profile) |
 | phone ↔ HL2 (`PHONE_TO_HL2` / `HL2_TO_PHONE`) | unavailable | available |
 
 `HL2_UI` digital does not depend on the bridge: the phone app sends a touch summary every second
@@ -270,7 +270,8 @@ not a log:
 - one entry per local calendar month, keeping the current month and the previous six;
 - per month, weekday and weekend × 24 local hours, each with observed seconds, seconds with the
   watch connected, seconds per mode, and `[n, sum, sum of squares]` for emotion, physical,
-  social, digital and heart rate (seconds without a value, such as no watch, are not counted);
+  social, digital, heart rate and the watch VAD state (1 speech / 0 silence, so its mean is the
+  share of time the watch heard speech; seconds without a value, such as no watch, are not counted);
 - per month, observed seconds per place.
 
 The size is therefore bounded (a few hundred KB at most) regardless of how long it is

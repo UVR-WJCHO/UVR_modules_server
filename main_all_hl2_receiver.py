@@ -22,7 +22,8 @@ DATA_REPLY)을 사용하며, hl2_data_pb2(HL2SensorPacket)로 depth 및 확장 �
 사용자 상태 추정(modules/modules_HQS.py):
     python main_all_hl2_receiver.py --hqs                         # 상태·요소를 RGB 창에 표시
     --hqs 는 상태를 HL2_MODE(FOCUS / MOVING / TALKING / NONE 문자열)로 1 초마다 올린다.
-    또 WATCH_HR / WATCH_ACTIVITY / WATCH_VAD / PHONE_ACTIVITY 를 받아 HQS 패널 값(JSON)을 HL2_UI 로 올린다.
+    또 WATCH_HR / WATCH_ACTIVITY / PHONE_ACTIVITY 를 받아 HQS 패널 값(JSON)을 HL2_UI 로 올린다.
+    WATCH_VAD 는 패널에 쓰지 않고 프로파일에만 쌓는다.
     python main_all_hl2_receiver.py --hqs --start-posture standing
     python main_all_hl2_receiver.py --hqs --general               # 상태 우선순위 없이 점수로 고른다
     python main_all_hl2_receiver.py --hqs --profile output/hqs/profiles/A.json   # A 의 프로파일에 쌓는다

@@ -426,9 +426,10 @@ class HQSPanel:
     """와치 메시지(on_watch)와 HQSResult(on_hqs)를 받아 패널 이벤트를 낸다. 여러 스레드에서 부른다.
 
     Social = 0.5 x (face + voice), 0~1 연속값. face 는 HQS face 요소(대화 거리 안 얼굴, 1 초 시정수),
-    voice 는 최근 VOICE_WINDOW_S 중 말소리 비율의 소속도로 HL2 마이크(HQS voice 요소)와 와치 VAD 중
-    큰 쪽이다. 마지막으로 보낸 값과 SOCIAL_STEP 이상 달라질 때 낸다.
-    와치가 없으면(WATCH_TIMEOUT_S) 와치 VAD 는 버리고, Physical 은 HQS walking 요소로 대신한다
+    voice 는 HQS voice 요소(HL2 마이크, 최근 VOICE_WINDOW_S 중 말소리 비율의 소속도)다. 마지막으로 보낸
+    값과 SOCIAL_STEP 이상 달라질 때 낸다. 와치 VAD(WATCH_VAD)는 social 에 쓰지 않는다. 모드(TALKING·FOCUS)와
+    같은 voice 를 보게 하려는 것이다. 와치 VAD 는 상태만 들고 있다가 snapshot 으로 프로파일에 넘긴다.
+    와치가 없으면(WATCH_TIMEOUT_S) Physical 은 HQS walking 요소로 대신한다
     (걷기 0.5 / 아니면 0.0, source "hqs"). Emotion 은 심박뿐이라 대신할 것이 없다.
     Digital 은 폰 터치(on_phone)만 본다. 최근 PHONE_WINDOW 개 보고 중 터치가 있던 보고의 비율이고, 바뀔 때
     낸다. 터치 없이 화면만 보는 사용은 잡지 못한다. 폰 보고가 PHONE_TIMEOUT_S 끊기면 내지 않는다.
@@ -438,7 +439,7 @@ class HQSPanel:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._vad = deque()                       # 와치 VAD 전이 (수신 시각, is_speaking)
+        self._speaking: Optional[bool] = None     # 와치 VAD 마지막 상태. bridge 가 바뀔 때만 보내므로 그대로 들고 있다
         self._social: Optional[float] = None
         self._hist: Dict[str, deque] = {}         # type -> 최근 값 (시각, 값). 하이라이트 판정용
         self._src: Dict[str, str] = {}
@@ -453,7 +454,7 @@ class HQSPanel:
         self._phone_ok = False
 
     def on_watch(self, kind: str, msg: Dict) -> Optional[Dict]:
-        """kind: "hr" (WATCH_HR) / "activity" (WATCH_ACTIVITY) / "vad" (WATCH_VAD)."""
+        """kind: "hr" (WATCH_HR) / "activity" (WATCH_ACTIVITY) / "vad" (WATCH_VAD, 프로파일에만 쓴다)."""
         with self._lock:
             self._t_watch = time.time()
         if kind == "hr":
@@ -471,9 +472,9 @@ class HQSPanel:
             with self._lock:
                 self._physical = v
                 return self._event("physical", "activity", v, time.time())
-        if kind == "vad" and "is_speaking" in msg:   # social 은 다음 on_hqs 에서 다시 잰다
+        if kind == "vad" and "is_speaking" in msg:
             with self._lock:
-                self._vad.append((time.time(), bool(msg["is_speaking"])))
+                self._speaking = bool(msg["is_speaking"])
         return None
 
     def on_phone(self, msg: Dict) -> Optional[Dict]:
@@ -500,7 +501,6 @@ class HQSPanel:
             ok = now - self._t_watch < WATCH_TIMEOUT_S
             if ok != self._watch_ok:
                 self._watch_ok, self._physical_hqs = ok, None   # 와치가 끊기면 HL2 값을 바로 한 번 보낸다
-                self._vad.clear()                               # 끊기기 전 VAD 값은 돌아와도 믿을 수 없다
                 print("[HQS] 와치 수신 중" if ok else
                       f"[HQS] 와치 데이터가 {WATCH_TIMEOUT_S:.0f} s 없다(main_devicebridge 확인). "
                       "physical 은 HL2 머리 이동으로 대신하고 emotion 은 보내지 않는다", flush=True)
@@ -509,8 +509,7 @@ class HQSPanel:
                 print(f"[HQS] 폰 보고(PHONE_ACTIVITY)가 {PHONE_TIMEOUT_S:.0f} s 없다. digital 은 보내지 않는다",
                       flush=True)
             events = []
-            voice = max(r.primitives["voice"], self._watch_voice(now) if ok else 0.0)
-            v = 0.5 * (r.primitives["face"] + voice)
+            v = 0.5 * (r.primitives["face"] + r.primitives["voice"])
             if self._social is None or abs(v - self._social) >= SOCIAL_STEP:
                 self._social = v
                 events.append(self._event("social", "combined", v, now))
@@ -520,15 +519,6 @@ class HQSPanel:
                     self._physical_hqs = self._physical = v
                     events.append(self._event("physical", "hqs", v, now))
             return events
-
-    def _watch_voice(self, now: float) -> float:
-        """와치 VAD 전이로 최근 VOICE_WINDOW_S 중 말소리 비율을 내어 HQS voice 와 같은 소속도로 바꾼다."""
-        t0 = now - VOICE_WINDOW_S
-        while len(self._vad) > 1 and self._vad[1][0] <= t0:
-            self._vad.popleft()
-        vad = list(self._vad) + [(now, False)]
-        speak = sum(max(0.0, t1 - max(t, t0)) for (t, s), (t1, _) in zip(vad, vad[1:]) if s)
-        return _member(speak / VOICE_WINDOW_S, VOICE_DENSITY, VOICE_WIDTH)
 
     def _event(self, kind: str, source: str, v: float, now: float) -> Dict:
         """패널 이벤트 하나. 같은 type 의 최근 W 초 값과 D 이상 다르면 highlight. 한 번 켜지면 그 값부터,
@@ -550,7 +540,8 @@ class HQSPanel:
                 "highlight": hl}
 
     def snapshot(self) -> Dict:
-        """패널 값(없으면 None)과 bpm, 와치 연결 여부, 마지막 HL2DATA 처리 시각(t_hl2)."""
+        """패널 값(없으면 None)과 bpm, 와치 VAD(말소리 1.0 / 아니면 0.0), 와치 연결 여부,
+        마지막 HL2DATA 처리 시각(t_hl2)."""
         with self._lock:
             now = time.time()
             ok = now - self._t_watch < WATCH_TIMEOUT_S
@@ -558,7 +549,8 @@ class HQSPanel:
             return {"t_hl2": self._t_hl2, "watch": ok, "emotion": self._emotion if ok else None,
                     "physical": self._physical, "social": self._social,
                     "digital": self._digital if phone else None,
-                    "bpm": self._bpm if ok else None}
+                    "bpm": self._bpm if ok else None,
+                    "watch_vad": float(self._speaking) if ok and self._speaking is not None else None}
 
 
 # ------------------------------------------------------------------------ 녹화 형식

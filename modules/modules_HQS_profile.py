@@ -9,8 +9,10 @@
       s                         관측한 초(HL2DATA 가 들어오던 시간)
       watch_s                   그중 와치가 붙어 있던 초
       mode                      모드(FOCUS / MOVING / TALKING / NONE ...)별 초
-      emotion physical social digital bpm
-                                [n, 합, 제곱합]. 값이 없던 초(와치·폰 없음 등)는 세지 않는다
+      emotion physical social digital bpm watch_vad
+                                [n, 합, 제곱합]. 값이 없던 초(와치·폰 없음 등)는 세지 않는다.
+                                watch_vad 는 1 초마다 본 와치 VAD 상태(말소리 1 / 아니면 0)라 평균이
+                                와치가 말소리로 판정한 시간 비율이다
 
 [n, 합, 제곱합] 은 달·칸끼리 더하기만 하면 합쳐지므로 원하는 기간·시간대의 평균과 분산을 바로 낸다.
 크기는 기록 기간과 무관하게 최대 (KEEP_MONTHS + 1) x 48 칸, 수백 KB 이하다.
@@ -32,7 +34,7 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_PROFILE = os.path.join(_REPO, "output", "hqs", "profiles", "default.json")
 SCHEMA = 1
 KEEP_MONTHS = 6           # 이번 달 + 지난 6 개월. 가장 오래된 달도 한 달을 다 채우므로 최소 6 개월치가 남는다
-VALUES = ("emotion", "physical", "social", "digital", "bpm")
+VALUES = ("emotion", "physical", "social", "digital", "bpm", "watch_vad")
 HL2_STALE_S = 5.0         # HL2DATA 가 이만큼 끊기면 그동안은 관측하지 않은 것으로 본다
 GEO_URL = "https://ipinfo.io/json"   # 공인 IP 의 도시·위경도·시간대. 토큰 없이 쓴다
 

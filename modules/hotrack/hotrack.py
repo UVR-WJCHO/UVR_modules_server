@@ -7727,6 +7727,39 @@ class Hotrack:
         self.events.append({"type": "object_retired", "frame": int(self.frame_idx),
                             "obj_id": int(oid), "reason": reason})
 
+    @torch.inference_mode()
+    def warmup_tracking_only(self) -> float:
+        """Prepare CUDA inference before accepting RGB, using a disposable state.
+
+        Loading weights does not initialize the first prompt/memory kernels.
+        Never use the live state or consume an object ID for this preparation.
+        """
+        if not self.use_cuda or self.sam2_backend != "online":
+            return 0.0
+        start = time.perf_counter()
+        image = np.zeros((360, 640, 3), dtype=np.uint8)
+        detect_image_bgr(self.ho_model, image, use_cuda=True,
+                         thresh_hand=self.ho_thresh_hand, thresh_obj=self.ho_thresh_obj)
+        state = self.sam2_tracker.init_state(image)
+        try:
+            box = np.asarray([240, 90, 400, 270], dtype=np.float32)
+            self.sam2_tracker.add_new_points_or_box(state, frame_idx=0, obj_id=100, box=box)
+            if self.enable_prompt_refinement:
+                self.sam2_tracker.add_new_points_or_box(
+                    state, frame_idx=0, obj_id=100, box=box,
+                    points=np.asarray([[280, 140], [320, 180], [360, 220]], dtype=np.float32),
+                    labels=np.ones(3, dtype=np.int32), clear_old_points=True,
+                )
+            mask = np.zeros(image.shape[:2], dtype=bool)
+            mask[90:270, 240:400] = True
+            self.sam2_tracker.add_new_mask(state, frame_idx=0, obj_id=100, mask=mask)
+            state = self.sam2_tracker.add_frame(state, image)
+            self.sam2_tracker.get_mask(state, 1)
+        finally:
+            self.sam2_tracker.reset_state(state)
+        torch.cuda.synchronize()
+        return time.perf_counter() - start
+
     def _process_frame_tracking_only(
         self,
         image_bgr: np.ndarray,
@@ -7864,9 +7897,16 @@ class Hotrack:
                 support = self._project_mask(tracked_masks[existing_id], box)
                 # An oversized/drifting bounding rectangle alone is not a
                 # reason to call a newly detected object already registered.
-                support_ratio = np.count_nonzero(support) / box_area
+                support_area = int(np.count_nonzero(support))
+                # A diagonal/thin silhouette need not fill half of its box.
+                # Require substantial support in BOTH directions instead:
+                # most of the track remains in the detection, and at least
+                # the capture-selection minimum of the box is supported.
+                mask_coverage = support_area / max(1, np.count_nonzero(tracked_masks[existing_id]))
+                box_coverage = support_area / box_area
                 if (bbox_iou(box, existing_box) >= self.existing_object_box_iou_skip_th
-                        or intersection / box_area >= self.existing_object_box_cover_skip_th) and support_ratio >= 0.5:
+                        or intersection / box_area >= self.existing_object_box_cover_skip_th
+                        ) and mask_coverage >= 0.5 and box_coverage >= 0.25:
                     existing_match = True
                     break
             if existing_match:

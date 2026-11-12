@@ -51,12 +51,13 @@ def visualize_results(base_path, case_name):
         os.makedirs(vis_output_dir, exist_ok=True)
 
         for seg_file in seg_files:
-            mask = np.load(os.path.join(seg_dir, seg_file)).astype(np.float32)
+            seg = np.load(os.path.join(seg_dir, seg_file))
+            mask = np.full(seg.shape, np.nan, dtype=np.float32)
 
             for part_id, val in part_values.items():
-                mask[mask == part_id] = label_to_idx[val] if is_string else val
+                mask[seg == part_id] = label_to_idx[val] if is_string else val
 
-            masked = np.ma.masked_where(mask == -1, mask)
+            masked = np.ma.masked_invalid(mask)
             vmin, vmax = np.min(masked), np.max(masked)
 
             cmap = plt.colormaps['tab20'].resampled(len(all_labels)) if is_string else 'viridis'

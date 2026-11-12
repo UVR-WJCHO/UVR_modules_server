@@ -27,7 +27,7 @@ def _parse_message(message):
             continue
         parts = [p.strip() for p in line.split(",")]
         if len(parts) >= 3:
-            return parts[0], parts[1].lower(), parts[2]
+            return parts[0], parts[1].lower(), parts[2].lower()
     return "unknown", "unknown", "unknown"
 
 
@@ -51,7 +51,7 @@ def _save_results(votes, results_file_path, base_path, case_name, output_json):
     json_data = {"version": 1, "parts": []}
     for part_id, v in sorted(votes.items()):
         material = Counter(v["materials"]).most_common(1)[0][0]
-        affordance = Counter(v["affordances"]).most_common(1)[0][0]
+        affordance = Counter(v["affordances"]).most_common(1)[0][0] if v["affordances"] else "unknown"
         caption = Counter(v["captions"]).most_common(1)[0][0]
 
         priors = MATERIAL_PROPERTY_PRIORS.get(material, {})
@@ -116,8 +116,11 @@ def _query_vlm_sync(base_path, case_name, vlm_type, system_prompt, prompt, resul
         if part_id not in votes:
             votes[part_id] = {"captions": [], "materials": [], "affordances": []}
         votes[part_id]["captions"].append(caption)
+        # Material stays unfiltered: names outside the metal library (plastic, rubber, ...)
+        # are mapped downstream by modules_metaobj. Affordances must come from the list.
         votes[part_id]["materials"].append(material)
-        votes[part_id]["affordances"].append(affordance)
+        if affordance in AFFORDANCES:
+            votes[part_id]["affordances"].append(affordance)
 
     _save_results(votes, results_file_path, base_path, case_name, output_json)
 

@@ -11,7 +11,7 @@ comm_hub 로 올리고, HL2 가 폰에 보내는 메시지를 받아 폰에 내�
 
 실행
     python comm_hub.py
-    python main_phonebridge.py --device HoloLens2_C   # 폰 앱 화면에서 서버 IP 를 이 PC 로 바꾼다
+    python main_phonebridge.py --device HoloLens2_A   # 폰 앱 화면에서 서버 IP 를 이 PC 로 바꾼다
 
 폰: PHONE_TO_HL2 로 올라가고, HL2_TO_PHONE 중 --device 기기가 보낸 것을 받아 폰에 내려보낸다
 (modules/devicebridge/phone.py).

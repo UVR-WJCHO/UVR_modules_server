@@ -21,8 +21,8 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 ├── main_all_hl2_receiver.py   # HL2DATA viewer (RGB / depth / overlay); --hqs adds user state (HQS)
 ├── main_watchbridge.py        # Watch (WebSocket) → comm_hub bridge
 ├── main_phonebridge.py        # Phone (TCP) ↔ comm_hub bridge
-├── run_wiseui_B.sh            # HQS + hand tracking + watch bridge for one headset (default HoloLens2_B)
-├── run_wiseui_C.sh            # Phone bridge for one headset (default HoloLens2_C)
+├── run_wiseui_B_developer.sh  # HQS + hand tracking + watch bridge for one headset (default HoloLens2_B)
+├── run_wiseui_A_designer.sh   # Phone bridge for one headset (default HoloLens2_A)
 │
 ├── modules/
 │   ├── modules_mesh.py        # MeshReconstructor        (wraps meshrecon/ TRELLIS)
@@ -240,10 +240,10 @@ python main_watchbridge.py                 # terminal 2   (watch; see below)
 python main_all_hl2_receiver.py --hqs      # terminal 3
 ```
 
-`./run_wiseui_B.sh [clientIdentity]` starts the receiver with `--hqs`, `main_handtrack.py` and
+`./run_wiseui_B_developer.sh [clientIdentity]` starts the receiver with `--hqs`, `main_handtrack.py` and
 `main_watchbridge.py` for one headset (default `HoloLens2_B`) and stops all three with one Ctrl+C.
-`./run_wiseui_C.sh [clientIdentity]` starts `main_phonebridge.py` for the headset paired with the
-phone (default `HoloLens2_C`).
+`./run_wiseui_A_designer.sh [clientIdentity]` starts `main_phonebridge.py` for the headset paired with the
+phone (default `HoloLens2_A`).
 
 | option | effect |
 |---|---|
@@ -312,7 +312,7 @@ channels feed the HQS panel of entry point 4.
 ```bash
 python comm_hub.py --port 37001                    # terminal 1
 python main_watchbridge.py                         # terminal 2   (--no-raw-audio to publish VAD only)
-python main_phonebridge.py --device HoloLens2_C    # terminal 3
+python main_phonebridge.py --device HoloLens2_A    # terminal 3
 ```
 
 ---

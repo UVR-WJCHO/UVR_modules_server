@@ -15,7 +15,7 @@ HL2 와 쓰일 수 있어 진입점을 나눈다.
 python comm_hub.py
 python main_watchbridge.py                       # 와치. --ws-port 8765 기본
 python main_watchbridge.py --no-raw-audio        # WATCH_AUDIO 는 안 올리고 WATCH_VAD 만
-python main_phonebridge.py --device HoloLens2_C  # 폰. --tcp-port 8777 기본
+python main_phonebridge.py --device HoloLens2_A  # 폰. --tcp-port 8777 기본
 ```
 
 `--device` 는 폰과 연동할 HL2 의 clientIdentity 다. `HL2_TO_PHONE` 은 그 기기가 보낸 것만 폰에 넘긴다.

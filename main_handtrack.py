@@ -238,7 +238,6 @@ def main():
             depth_mm = decode_depth_aligned_mm(pkt.depth_data)   # lift 용 (native PV 해상도, mm)
          
 
-            cv2.imshow('RGB', color)
             if FLAG_VISUALIZE_DEPTH and depth is not None:
                 depth_norm = np.clip(depth / (DEPTH_MAX_MM / 1000.0), 0, 1)
                 depth_vis = cv2.applyColorMap((depth_norm * 255).astype(np.uint8), cv2.COLORMAP_TURBO)

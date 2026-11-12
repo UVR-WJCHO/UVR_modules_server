@@ -12,7 +12,7 @@ DATA_REPLY)을 사용하며, hl2_data_pb2(HL2SensorPacket)로 depth 및 확장 �
   (투영/overlay 로직은 old/zmq_hl2_receiver.py 를 참고해 반영)
 
 실행:
-    conda activate wiseui_commu
+    conda activate uvr_integ
     cd WiseUIServer
     python hl2_receiver.py                 # 창(RGB overlay / depth / depth overlay) + 콘솔 통계
     python hl2_receiver.py --no-gui        # 콘솔 통계만 (SSH/headless)

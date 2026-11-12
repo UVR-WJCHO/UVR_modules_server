@@ -162,10 +162,11 @@ def lift_pose_cam3d(outs_uvd, depth_mm, fx, fy, cx, cy, frame_wh, wrist_mm_fallb
     return out, zw_fresh
 
 
-def build_result(pkt, hand_flat, gesture_idx):
+def build_result(pkt, hand_flat, gesture_idx, target):
     """수신 프레임의 pose/intrinsics/timestamp 를 echo 해서 ServerResult 로 직렬화.
-    hand pose 가 메인, gesture_idx 는 덤(-1=없음)."""
+    hand pose 가 메인, gesture_idx 는 덤(-1=없음). target 은 받을 HL2(빈 문자열이면 모든 HL2)."""
     r = proto.ServerResult()
+    r.target_device_id = target
     r.timestamp = pkt.timestamp
     r.cam_to_world.extend(pkt.cam_to_world)      # PV pose (16) echo
     r.fx = pkt.fx; r.fy = pkt.fy; r.cx = pkt.cx; r.cy = pkt.cy
@@ -178,6 +179,8 @@ def build_result(pkt, hand_flat, gesture_idx):
 def main():
     ap = argparse.ArgumentParser(description="HL2 handtrack over comm_hub")
     add_broker_args(ap)
+    ap.add_argument("--device", default=None,
+                    help="처리할 HL2 의 clientIdentity(HL2DATA 의 source). 주지 않으면 모든 기기를 섞어 받는다")
     args = ap.parse_args()
 
     # 무거운 모델 import 는 여기서 (모듈 import 를 가볍게 유지 -> comm 계층 테스트 가능)
@@ -201,7 +204,9 @@ def main():
 
     # 2. comm_hub 연결
     hub = HubClient(args.host, args.port,
-                    result_kw=KW_SERVER_RESULT, identity=IDENTITY)
+                    result_kw=KW_SERVER_RESULT, identity=IDENTITY,
+                    from_source=args.device.encode() if args.device else None)
+    target = args.device or ""      # SERVER_RESULT 의 target_device_id. 비어 있으면 모든 HL2 가 반영한다
 
     # 3. Visualization
     cv2.namedWindow('Prompt')
@@ -255,7 +260,7 @@ def main():
                 valid_gesture_idx = -1
                 gesture_cnt = 0
                 # 손 미검출: 더미 pose + -1 (pose/ts/intrinsics 는 echo)
-                hub.send(build_result(pkt, debug_pose.flatten(), -1))
+                hub.send(build_result(pkt, debug_pose.flatten(), -1, target))
                 continue
 
             # 7-9. Gesture recognition (optional, FLAG_GESTURE)
@@ -339,7 +344,7 @@ def main():
 
             # 손을 찾은 프레임은 항상 3D 로 나간다. 더미(전부 1.0 = "유효하지 않음")는
             # 손 미검출일 때만 쓴다.
-            hub.send(build_result(pkt, hand3d.flatten(), out_idx))
+            hub.send(build_result(pkt, hand3d.flatten(), out_idx, target))
 
     except KeyboardInterrupt:
         pass

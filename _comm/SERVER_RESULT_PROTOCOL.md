@@ -86,6 +86,7 @@ message ServerResult {
   float  cy = 6;
   repeated float hand = 7;           // ★ 메인: absolute 3D 관절 (21*3 xyz, meters, PV 카메라 프레임)
   int32  gesture_idx = 8;            // 덤: -1 = 없음, 그 외 0~14 (아래 매핑)
+  string target_device_id = 9;       // 받을 HL2 의 clientIdentity. 비어 있으면 모든 HL2
 }
 ```
 
@@ -98,6 +99,7 @@ message ServerResult {
 | `fx,fy,cx,cy` | float | 각 1 | 원본 프레임의 **PV intrinsics** echo |
 | `hand` | float[] | 63 | **absolute 3D 관절 21개 × (x, y, z)** flatten, **meters, PV 카메라 프레임**. 메인 데이터 |
 | `gesture_idx` | int32 | 1 | 제스처 클래스 인덱스. **-1 = 제스처 없음**. 덤(부가정보) |
+| `target_device_id` | string | 1 | 이 결과를 받을 HL2 의 `clientIdentity`(서버 `main_handtrack.py --device` 값). 자기 것과 같을 때만 반영한다. 비어 있으면 모든 HL2 가 반영. [TARGET_DEVICE_PROTOCOL.md](TARGET_DEVICE_PROTOCOL.md) |
 
 ### `hand` (21×3, xyz) 해석
 - 21개 관절, 각 `(x, y, z)` **meters**, **PV 카메라 프레임** (OpenCV 축: +X 오른쪽, +Y 아래, +Z 앞).

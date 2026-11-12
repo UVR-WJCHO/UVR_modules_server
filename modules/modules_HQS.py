@@ -502,7 +502,7 @@ class HQSPanel:
             if ok != self._watch_ok:
                 self._watch_ok, self._physical_hqs = ok, None   # 와치가 끊기면 HL2 값을 바로 한 번 보낸다
                 print("[HQS] 와치 수신 중" if ok else
-                      f"[HQS] 와치 데이터가 {WATCH_TIMEOUT_S:.0f} s 없다(main_devicebridge 확인). "
+                      f"[HQS] 와치 데이터가 {WATCH_TIMEOUT_S:.0f} s 없다(main_watchbridge 확인). "
                       "physical 은 HL2 머리 이동으로 대신하고 emotion 은 보내지 않는다", flush=True)
             if self._phone_ok and now - self._t_phone >= PHONE_TIMEOUT_S:
                 self._phone_ok = False

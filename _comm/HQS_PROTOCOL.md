@@ -5,10 +5,12 @@
 
 | keyword | 본문 | 용도 |
 |---|---|---|
-| `HL2_MODE` | UTF-8 문자열 `FOCUS` / `MOVING` / `TALKING` / `NONE` | 모드 전환 창 |
-| `HL2_UI` | UTF-8 JSON `{"type","source","value","timestamp","highlight"}` | HQS 패널(Emotional / Physical / Social / Digital) 값과 영역 하이라이트 |
+| `HL2_MODE` | UTF-8 JSON `{"target_device_id","mode"}`. mode 는 `FOCUS` / `MOVING` / `TALKING` / `NONE` | 모드 전환 창 |
+| `HL2_UI` | UTF-8 JSON `{"target_device_id","type","source","value","timestamp","highlight"}` | HQS 패널(Emotional / Physical / Social / Digital) 값과 영역 하이라이트 |
 
-서버는 HL2 한 대(한 사용자)를 기준으로 계산한다. 같은 broker 에 HL2 가 여러 대 붙어 있으면 모두 같은 값을 받는다.
+서버는 HL2 한 대(한 사용자)를 기준으로 계산한다. 그 기기는 서버 실행 때 `--device` 로 정하고, 모든 메시지의
+`target_device_id` 에 그 `clientIdentity` 가 들어간다. 같은 broker 에 HL2 가 여러 대 붙어 있으면 모두 받지만,
+`target_device_id` 가 자기 것과 같은 기기만 반영한다(비어 있으면 모두 반영). [TARGET_DEVICE_PROTOCOL.md](TARGET_DEVICE_PROTOCOL.md)
 
 ## 1. 수신
 
@@ -32,7 +34,13 @@ DATA_REPLY 의 keyword(프레임 2)로 `HL2_MODE` / `HL2_UI` / 기존 keyword �
 
 ## 2. HL2_MODE
 
-본문: UTF-8 문자열 하나. `FOCUS`, `MOVING`, `TALKING`, `NONE`.
+본문: UTF-8 JSON 한 개. `mode` 는 `FOCUS`, `MOVING`, `TALKING`, `NONE`.
+
+```json
+{"target_device_id": "HoloLens2_B", "mode": "FOCUS"}
+```
+
+본문이 `{` 로 시작하지 않으면 예전 서버의 형식(모드 문자열만)이다. 본문 전체를 `mode` 로 보고 반영한다.
 
 | 모드 | 서버 판정 |
 |---|---|
@@ -66,11 +74,12 @@ HL2 쪽 처리:
 본문: UTF-8 JSON 한 개.
 
 ```json
-{"type": "social", "source": "combined", "value": 0.62, "timestamp": 1730000002.341, "highlight": true}
+{"target_device_id": "HoloLens2_B", "type": "social", "source": "combined", "value": 0.62, "timestamp": 1730000002.341, "highlight": true}
 ```
 
 | 필드 | 타입 | 내용 |
 |---|---|---|
+| `target_device_id` | string | 받을 HL2 의 `clientIdentity`. 자기 것과 같을 때만 반영. 비어 있으면 모두 반영 |
 | `type` | string | `emotion` / `physical` / `social` / `digital` |
 | `source` | string | 값을 만든 근거. 아래 표 |
 | `value` | float | 패널에 바로 쓰는 0~1 값 |
@@ -86,7 +95,7 @@ HL2 쪽 처리:
 | `digital` | `phone_touch` | 0~1, 0.1 단위. 아래 3.3 | 값이 바뀔 때(폰 보고마다, 최대 약 1 Hz) |
 
 - 매번 값이 오는 게 아니라 바뀔 때 온다. HL2 는 type 별 마지막 값을 들고 있다가 새 값이 오면 바꾼다.
-- 와치(서버의 main_devicebridge)가 없거나 5 초 넘게 끊기면 emotion 은 오지 않고, physical 은 `source: "hqs"` 로 온다.
+- 와치(서버의 main_watchbridge)가 없거나 5 초 넘게 끊기면 emotion 은 오지 않고, physical 은 `source: "hqs"` 로 온다.
   와치가 돌아오면 다음 와치 활동 변화부터 다시 `activity` 로 온다.
 - 폰 앱의 터치 보고가 3 초 넘게 끊기면 digital 은 오지 않는다. 돌아오면 0 부터 다시 쌓여 올라간다.
 - Unity `JsonUtility.FromJson` 으로 그대로 읽힌다(type, source: string / value: float / timestamp: double /
@@ -144,5 +153,6 @@ digital = 최근 폰 보고 10 개(약 10 초) 중 터치가 있던 보고의 �
 ## 4. HL2 앱이 이미 해 주고 있어야 하는 것
 
 - HL2DATA 전송(머리 자세, RGB, depth). 상태 판정의 입력이다.
-- `HL2_CONTROL` 수신과 `HL2_AUDIO` 전송. 서버가 5 초마다 `HL2Control(send_audio=true)` 를 보내 마이크를 요청한다.
+- `HL2_CONTROL` 수신과 `HL2_AUDIO` 전송. 서버가 5 초마다 `HL2Control(send_audio=true, target_device_id=<기기>)` 를
+  보내 마이크를 요청한다. `target_device_id` 가 자기 것이 아니면 메시지 전체를 무시한다.
   마이크가 오지 않으면 말소리가 0 이라 TALKING 이 나오지 않고, social 은 얼굴만으로 최대 0.5 다.

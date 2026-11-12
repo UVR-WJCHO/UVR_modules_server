@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# HQS 상태(HL2_MODE)·패널(HL2_UI), 손 pose·gesture(SERVER_RESULT), 와치·폰 bridge 를 한 번에 띄운다.
-# comm_hub.py 는 따로 먼저 띄워 둔다. Ctrl+C 한 번이면 셋 다 끄고, 하나가 끝나면 나머지도 끈다.
-#   ./run_wiseui.sh
+# HL2 한 대에 HQS 상태(HL2_MODE)·패널(HL2_UI)과 손 pose·gesture(SERVER_RESULT)를 내고, 와치 bridge 를 함께 띄운다.
+# 폰 연동은 run_wiseui_C.sh 가 따로 맡는다. comm_hub.py 는 따로 먼저 띄워 둔다.
+# Ctrl+C 한 번이면 셋 다 끄고, 하나가 끝나면 나머지도 끈다.
+#   ./run_wiseui_B.sh                 # HoloLens2_B
+#   ./run_wiseui_B.sh HoloLens2_D     # 다른 기기. HL2 앱의 clientIdentity
+DEVICE=${1:-HoloLens2_B}
 set -m          # 프로세스마다 process group 을 따로 둔다. Ctrl+C 는 이 스크립트만 받고 stop 이 나눠 준다
 cd "$(dirname "$0")"
 PY=~/anaconda3/envs/uvr_integ/bin/python
@@ -25,7 +28,7 @@ stop() {
 }
 trap stop INT TERM EXIT
 
-start RECV main_all_hl2_receiver.py --hqs
-start HAND main_handtrack.py
-start BRIDGE main_devicebridge.py
+start RECV main_all_hl2_receiver.py --hqs --device "$DEVICE"
+start HAND main_handtrack.py --device "$DEVICE"
+start WATCH main_watchbridge.py
 wait -n

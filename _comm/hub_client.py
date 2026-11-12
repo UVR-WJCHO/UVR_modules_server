@@ -38,7 +38,7 @@ KW_HL2_CONTROL = b"HL2_CONTROL"      # 서버 -> HL2. 온디맨드 스트림 on/
 KW_HL2_AUDIO = b"HL2_AUDIO"          # HL2 -> 서버. 마이크 청크
 KW_HL2_RENDER = b"HL2_RENDER"        # HL2 -> 서버. AR 레이어 (홀로그램만, 배경 투명)
 KW_HL2_IMU = b"HL2_IMU"              # HL2 -> 서버. (현재 미사용)
-KW_WATCH_HR = b"WATCH_HR"            # 와치 -> 서버. 심박 JSON (main_devicebridge.py 가 올린다)
+KW_WATCH_HR = b"WATCH_HR"            # 와치 -> 서버. 심박 JSON (main_watchbridge.py 가 올린다)
 KW_WATCH_ACTIVITY = b"WATCH_ACTIVITY"  # 와치 -> 서버. 활동 전이 JSON
 KW_WATCH_AUDIO = b"WATCH_AUDIO"      # 와치 -> 서버. 20 ms PCM 청크 JSON (base64)
 KW_WATCH_VAD = b"WATCH_VAD"          # bridge -> 구독자. 발화 여부, 바뀔 때만
@@ -46,7 +46,7 @@ KW_PHONE_TO_HL2 = b"PHONE_TO_HL2"    # 폰 -> HL2. RoverHandoff NetMessage JSON 
 KW_HL2_TO_PHONE = b"HL2_TO_PHONE"    # HL2 -> 폰. 같은 형식. bridge 가 받아 폰에 TCP 로 보낸다
 KW_PHONE_ACTIVITY = b"PHONE_ACTIVITY"  # 폰 -> 서버. 1 초마다 터치 요약 JSON (폰 앱이 comm_hub 로 바로 올린다)
 KW_HL2_SCENE = b"HL2_SCENE"          # HL2 -> 서버. 기기 월드 기준 공유 콘텐츠 자세 JSON (HL2_SCENE_PROTOCOL.md)
-KW_HL2_MODE = b"HL2_MODE"            # 서버 -> HL2. 사용자 상태 모드 문자열 (FOCUS / MOVING / TALKING / NONE)
+KW_HL2_MODE = b"HL2_MODE"            # 서버 -> HL2. 사용자 상태 모드 JSON {target_device_id, mode: FOCUS / MOVING / TALKING / NONE}
 KW_HL2_UI = b"HL2_UI"                # 서버 -> HL2. HQS 패널 차원 값 JSON (type / source / value / timestamp)
 
 RECV_TIMEOUT_MS = 500                # rx 소켓 타임아웃. 종료 신호를 확인할 주기
@@ -65,14 +65,18 @@ class HubClient:
         queue_size:  1 이면 최신 한 프레임만 남긴다(conflate). 프레임을 건너뛰어도 되는
                      영상에는 이쪽이 맞다. 오디오처럼 연속성이 필요한 스트림은 더 크게 잡아
                      중간 청크가 버려지지 않게 한다
+        from_source: 주면 source 가 이 값인 것만 받는다(HL2 는 clientIdentity). 다른 source 는
+                     내려받지 않는다. None 이면 전부 받는다
     """
 
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
                  recv_kw: bytes | None = KW_HL2DATA, result_kw: bytes | None = None,
-                 identity: bytes = b"CLIENT", queue_size: int = 1):
+                 identity: bytes = b"CLIENT", queue_size: int = 1,
+                 from_source: bytes | None = None):
         self.ctx = zmq.Context()
         self.identity = identity
         self.result_kw = result_kw
+        self.from_source = from_source
 
         self.rx = self.ctx.socket(zmq.DEALER)
         self.rx.setsockopt(zmq.IDENTITY, identity)
@@ -102,7 +106,8 @@ class HubClient:
 
         print(f"{identity.decode()} :: connected tcp://{host}:{port}, "
               f"recv={recv_kw.decode() if recv_kw else '-'} "
-              f"result={result_kw.decode() if result_kw else '-'}", flush=True)
+              f"result={result_kw.decode() if result_kw else '-'}"
+              + (f" from={from_source.decode()}" if from_source else ""), flush=True)
 
     def _rx_loop(self) -> None:
         while not self._stop:
@@ -114,6 +119,8 @@ class HubClient:
                 break                       # 소켓/컨텍스트 종료
             if msg[1] == b"NOTIFY":
                 _, _, kw, src, fid = msg
+                if self.from_source is not None and src != self.from_source:
+                    continue                # 다른 기기의 것은 내려받지 않는다
                 self.rx.send_multipart([b"", b"DOWNLOAD", kw, src, fid])
             elif msg[1] == b"DATA_REPLY":
                 _, _, kw, src, fid, data = msg

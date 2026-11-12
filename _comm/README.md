@@ -48,15 +48,15 @@ hub.close()
 | `KW_SERVER_RESULT` | `SERVER_RESULT` | `main_handtrack.py` 결과 |
 | `KW_HAND_FORECAST` | `HAND_FORECAST` | `main_handtrack_forecast.py` 결과 |
 | `KW_MESH_RESULT` | `MESH_RESULT` | `main_metaobjrecon.py` 결과 |
-| `KW_WATCH_HR` | `WATCH_HR` | 와치 심박 JSON. `main_devicebridge.py` 가 올린다 |
+| `KW_WATCH_HR` | `WATCH_HR` | 와치 심박 JSON. `main_watchbridge.py` 가 올린다 |
 | `KW_WATCH_ACTIVITY` | `WATCH_ACTIVITY` | 와치 활동 전이 JSON |
 | `KW_WATCH_AUDIO` | `WATCH_AUDIO` | 와치 20 ms PCM 청크 JSON. `--no-raw-audio` 면 없음 |
 | `KW_WATCH_VAD` | `WATCH_VAD` | 발화 여부. 값이 바뀔 때만 |
 | `KW_PHONE_TO_HL2` | `PHONE_TO_HL2` | 폰 -> HL2. RoverHandoff NetMessage JSON. bridge 가 올린다 |
 | `KW_HL2_TO_PHONE` | `HL2_TO_PHONE` | HL2 -> 폰. 같은 형식. bridge 가 받아 폰에 TCP 로 보낸다 |
 | `KW_HL2_SCENE` | `HL2_SCENE` | HL2 -> 서버. 기기별 로버 자세(`rover_pose` JSON). 다중 기기 정합용. 구독자 아직 없음. [HL2_SCENE_PROTOCOL.md](HL2_SCENE_PROTOCOL.md) |
-| `KW_HL2_MODE` | `HL2_MODE` | 서버 -> HL2. 사용자 상태 모드 UTF-8 문자열 `FOCUS` / `MOVING` / `TALKING` / `NONE`. `main_all_hl2_receiver.py --hqs` 가 1 초마다 올린다. [HQS_PROTOCOL.md](HQS_PROTOCOL.md) |
-| `KW_HL2_UI` | `HL2_UI` | 서버 -> HL2. HQS 패널 차원 값 JSON `{"type","source","value","timestamp"}`. `main_all_hl2_receiver.py --hqs` 가 값이 바뀔 때 올린다. [HQS_PROTOCOL.md](HQS_PROTOCOL.md) |
+| `KW_HL2_MODE` | `HL2_MODE` | 서버 -> HL2. 사용자 상태 모드 JSON `{"target_device_id","mode"}`, mode 는 `FOCUS` / `MOVING` / `TALKING` / `NONE`. `main_all_hl2_receiver.py --hqs` 가 1 초마다 올린다. [HQS_PROTOCOL.md](HQS_PROTOCOL.md) |
+| `KW_HL2_UI` | `HL2_UI` | 서버 -> HL2. HQS 패널 차원 값 JSON `{"target_device_id","type","source","value","timestamp","highlight"}`. `main_all_hl2_receiver.py --hqs` 가 값이 바뀔 때 올린다. [HQS_PROTOCOL.md](HQS_PROTOCOL.md) |
 
 ## 환경
 

@@ -70,6 +70,8 @@ message ServerResult {
                                      //   frame, OpenCV axes +X right/+Y down/+Z fwd, DexYCB order).
                                      //   server-lifted: real wrist depth from aligned depth + root-rel z
   int32  gesture_idx = 8;            // -1 = none (bonus; HL2 maps idx->name)
+  string target_device_id = 9;       // clientIdentity of the HL2 this result is for; empty = every HL2
+                                     //   (TARGET_DEVICE_PROTOCOL.md)
 }
 
 // Server -> HL2 reconstructed object (comm_hub UPLOAD, kw=MESH_RESULT).

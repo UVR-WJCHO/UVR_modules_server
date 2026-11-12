@@ -23,6 +23,8 @@ message HL2Control {
   bool  send_imu         = 2;   // 현재 기기가 무시한다
   int32 imu_rate_divisor = 3;   // 0 또는 1 = 전부. 선택 구현
   bool  send_render      = 4;   // AR 레이어. send_audio 와 독립이다
+  string target_device_id = 5;  // 받을 HL2 의 clientIdentity. 비어 있으면 모든 HL2. 대상이 아니면 메시지 전체를
+                                //   무시한다 (TARGET_DEVICE_PROTOCOL.md)
 }
 
 // 기기 -> 서버. 마이크 청크.

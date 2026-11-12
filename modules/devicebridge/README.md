@@ -1,21 +1,25 @@
 # devicebridge — ZMQ 를 못 쓰는 기기를 comm_hub 에 붙인다
 
 HL2 앱은 comm_hub 에 직접 붙는다. 와치와 폰은 각자 프로토콜밖에 모르고 앱도 바꾸지 않기로
-했다. 그래서 기기별 프로토콜을 받아 comm_hub 로 올리는 어댑터를 `main_devicebridge.py`
-프로세스 하나에 모은다. 기기가 늘어도 프로세스는 늘지 않는다.
+했다. 그래서 기기별 프로토콜을 받아 comm_hub 로 올리는 어댑터를 둔다. 와치와 폰은 서로 다른
+HL2 와 쓰일 수 있어 진입점을 나눈다.
 
-| 어댑터 | 상태 | 받는 방식 | 올리는 keyword |
+| 어댑터 | 진입점 | 받는 방식 | 올리는 keyword |
 |---|---|---|---|
-| `watch.py` | 동작 | WebSocket 서버 (기본 8765) | `WATCH_HR` `WATCH_ACTIVITY` `WATCH_AUDIO` `WATCH_VAD` |
-| `phone.py` | 동작 | TCP 서버 (기본 8777), 4 B 길이 프레이밍 | `PHONE_TO_HL2` 올리고 `HL2_TO_PHONE` 받음 |
+| `watch.py` | `main_watchbridge.py` | WebSocket 서버 (기본 8765) | `WATCH_HR` `WATCH_ACTIVITY` `WATCH_AUDIO` `WATCH_VAD` |
+| `phone.py` | `main_phonebridge.py` | TCP 서버 (기본 8777), 4 B 길이 프레이밍 | `PHONE_TO_HL2` 올리고 `HL2_TO_PHONE` 받음 |
 
 ## 실행
 
 ```bash
 python comm_hub.py
-python main_devicebridge.py                 # --ws-port 8765, --tcp-port 8777 기본
-python main_devicebridge.py --no-raw-audio  # WATCH_AUDIO 는 안 올리고 WATCH_VAD 만
+python main_watchbridge.py                       # 와치. --ws-port 8765 기본
+python main_watchbridge.py --no-raw-audio        # WATCH_AUDIO 는 안 올리고 WATCH_VAD 만
+python main_phonebridge.py --device HoloLens2_C  # 폰. --tcp-port 8777 기본
 ```
+
+`--device` 는 폰과 연동할 HL2 의 clientIdentity 다. `HL2_TO_PHONE` 은 그 기기가 보낸 것만 폰에 넘긴다.
+주지 않으면 모든 HL2 의 것을 넘긴다.
 
 와치·폰 앱 화면에서 서버 IP 를 이 PC 로 바꾼다. 포트는 앱 기본값(8765 / 8777) 그대로다.
 

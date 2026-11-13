@@ -4,15 +4,18 @@
 
 - comm_hub 하나에 HL2 여러 대가 붙는다. 기기마다 `HL2Client.clientIdentity` 가 다르다
   (예: `HoloLens2_A`, `HoloLens2_B`, `HoloLens2_C`). 어떤 ID 가 몇 대 붙을지는 정해져 있지 않다.
-- 서버 기능은 기기별로 나뉜다. 어느 기기인지는 서버를 실행할 때 정한다.
-  - HQS 상태·패널, 손 gesture → 한 기기 (예: `HoloLens2_B`)
+- 서버 기능은 기기별로 나뉜다.
+  - HQS 상태·패널 → 모든 기기. 기기마다 그 기기에서 온 데이터로 따로 계산해 그 기기에 보낸다
+  - 손 gesture → 한 기기. 서버를 실행할 때 정한다 (예: `HoloLens2_B`)
   - 폰 연동: HL2 → 폰(`HL2_TO_PHONE`)은 한 기기 (예: `HoloLens2_C`)가 보낸 것만 폰에 간다.
     폰 → HL2(`PHONE_TO_HL2`)는 모든 HL2 가 받는다
 - 서버 출력 keyword 는 지금처럼 그것을 구독한 모든 HL2 에 간다. 그래서 서버가 출력 본문에 받을 기기를
   `target_device_id` 로 넣고, 각 HL2 는 자기 것만 반영한다. 필드 이름은 `OBJECT_STATE` 의
   `target_device_id` 와 같다.
 
-서버는 아래 새 형식으로 보낸다. 넣는 값은 서버 실행 때 준 `--device` 이고, 주지 않으면 빈 문자열이다.
+서버는 아래 새 형식으로 보낸다. 넣는 값은 그 메시지를 받을 기기의 `clientIdentity` 다.
+HQS 출력(`HL2_MODE`, `HL2_UI`, `HL2_CONTROL`)은 기기마다 각자의 ID 를 넣어 보내므로, 같은 keyword 에 여러 기기 앞으로
+가는 메시지가 섞여 온다. 손 결과(`SERVER_RESULT`)에는 서버 실행 때 정한 한 기기의 ID 가 들어간다.
 `HL2_MODE` 는 형식 자체가 바뀌므로 앱을 고치기 전에는 읽지 못한다.
 
 ## 1. 받는 쪽 규칙 (모든 서버 출력에 공통)
@@ -75,8 +78,8 @@
 
 ## 3. HL2 가 올리는 것 — Source 프레임 (형식 변경 없음, 확인 요청)
 
-서버는 HL2 가 올린 메시지의 Source 프레임으로 어느 기기 것인지 가린다. 서버 실행 때 지정한 기기와
-Source 가 같은 메시지만 처리하고 나머지는 받지 않는다.
+서버는 HL2 가 올린 메시지의 Source 프레임으로 어느 기기 것인지 가린다. HQS 는 Source 마다 따로 계산하고,
+손 추적과 폰 연동은 서버 실행 때 지정한 기기와 Source 가 같은 메시지만 처리한다.
 
 ```
 ["", "UPLOAD", <KEYWORD>, <SOURCE>, <FID>, <DATA>]

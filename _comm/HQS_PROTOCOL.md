@@ -8,9 +8,10 @@
 | `HL2_MODE` | UTF-8 JSON `{"target_device_id","mode"}`. mode 는 `FOCUS` / `MOVING` / `TALKING` / `NONE` | 모드 전환 창 |
 | `HL2_UI` | UTF-8 JSON `{"target_device_id","type","source","value","timestamp","highlight"}` | HQS 패널(Emotional / Physical / Social / Digital) 값과 영역 하이라이트 |
 
-서버는 HL2 한 대(한 사용자)를 기준으로 계산한다. 그 기기는 서버 실행 때 `--device` 로 정하고, 모든 메시지의
-`target_device_id` 에 그 `clientIdentity` 가 들어간다. 같은 broker 에 HL2 가 여러 대 붙어 있으면 모두 받지만,
-`target_device_id` 가 자기 것과 같은 기기만 반영한다(비어 있으면 모두 반영). [TARGET_DEVICE_PROTOCOL.md](TARGET_DEVICE_PROTOCOL.md)
+서버는 HL2 기기(한 사용자)마다 그 기기에서 온 데이터로 따로 계산하고, 메시지마다 `target_device_id` 에 받을 기기의
+`clientIdentity` 를 넣는다. 같은 broker 에 HL2 가 여러 대 붙어 있으면 모든 기기 앞으로 가는 메시지가 같은 keyword 로
+섞여 오므로, `target_device_id` 가 자기 것과 같은 메시지만 반영한다(비어 있으면 모두 반영). [TARGET_DEVICE_PROTOCOL.md](TARGET_DEVICE_PROTOCOL.md)
+와치 값과 폰 터치(digital)는 서버에서 와치·폰과 짝으로 정한 기기에만 간다. 다른 기기는 와치·폰이 없을 때처럼 받는다(3장).
 
 ## 1. 수신
 

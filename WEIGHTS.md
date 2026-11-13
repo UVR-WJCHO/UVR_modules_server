@@ -126,7 +126,7 @@
 
 ## 6-1. User State (HQS) — `pretrained/hqs/`
 
-소비: [modules/modules_HQS.py](modules/modules_HQS.py) `HQS` → 진입점 `main_all_hl2_receiver.py --hqs`
+소비: [modules/modules_HQS.py](modules/modules_HQS.py) `HQS` → 진입점 `main_all_hl2_receiver.py`
 
 | 파일 | 크기 | 용도 |
 |---|---|---|

@@ -14,7 +14,8 @@ comm_hub 로 올리고, HL2 가 폰에 보내는 메시지를 받아 폰에 내�
     python main_phonebridge.py --device HoloLens2_A   # 폰 앱 화면에서 서버 IP 를 이 PC 로 바꾼다
 
 폰: PHONE_TO_HL2 로 올라가고, HL2_TO_PHONE 중 --device 기기가 보낸 것을 받아 폰에 내려보낸다
-(modules/devicebridge/phone.py).
+(modules/devicebridge/phone.py). 또 --device 기기와 짝임을 DEVICE_PAIR 로 알려, HQS 는 폰 터치(PHONE_ACTIVITY,
+폰 앱이 comm_hub 로 바로 올린다)를 그 기기에만 쓴다(modules/devicebridge/pair.py).
 """
 from __future__ import annotations
 
@@ -30,6 +31,7 @@ sys.path.insert(0, _ROOT)
 
 from hub_client import (HubClient, add_broker_args,                      # noqa: E402
                         KW_PHONE_TO_HL2, KW_HL2_TO_PHONE)
+from modules.devicebridge.pair import announce_pair                     # noqa: E402
 from modules.devicebridge.phone import PhoneAdapter                     # noqa: E402
 
 IDENTITY = b"DEVICEBRIDGE_PHONE"    # 와치·폰 bridge 를 나누기 전과 같은 identity
@@ -50,8 +52,11 @@ async def _main(args) -> None:
                     identity=IDENTITY, queue_size=64,               # 이벤트라 빠지면 안 된다
                     from_source=args.device.encode() if args.device else None)
     phone = PhoneAdapter(hub)
+    tasks = [phone.serve(args.tcp_host, args.tcp_port), _status_loop(phone)]
+    if args.device:
+        tasks.append(announce_pair(hub, "phone", args.device))
     try:
-        await asyncio.gather(phone.serve(args.tcp_host, args.tcp_port), _status_loop(phone))
+        await asyncio.gather(*tasks)
     finally:
         hub.close()
 
@@ -60,8 +65,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="폰을 comm_hub 에 붙인다")
     add_broker_args(ap)
     ap.add_argument("--device", default=None,
-                    help="폰과 연동할 HL2 의 clientIdentity. HL2_TO_PHONE 은 이 기기가 보낸 것만 폰에 넘긴다. "
-                         "주지 않으면 모든 기기")
+                    help="폰과 연동할 HL2 의 clientIdentity. HL2_TO_PHONE 은 이 기기가 보낸 것만 폰에 넘기고, "
+                         "HQS 는 폰 터치를 이 기기에만 쓴다. 주지 않으면 HL2_TO_PHONE 은 모든 기기의 것을 넘기고 "
+                         "폰 터치는 어느 기기에도 쓰지 않는다")
     ap.add_argument("--tcp-host", default="0.0.0.0", help="폰 TCP 수신 주소")
     ap.add_argument("--tcp-port", type=int, default=8777, help="폰 TCP 포트 (폰 앱 기본값 8777)")
     args = ap.parse_args()

@@ -31,7 +31,7 @@ from typing import Dict
 from zoneinfo import ZoneInfo
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_PROFILE = os.path.join(_REPO, "output", "hqs", "profiles", "default.json")
+PROFILE_DIR = os.path.join(_REPO, "output", "hqs", "profiles")   # 기기마다 <clientIdentity>.json
 SCHEMA = 1
 KEEP_MONTHS = 6           # 이번 달 + 지난 6 개월. 가장 오래된 달도 한 달을 다 채우므로 최소 6 개월치가 남는다
 VALUES = ("emotion", "physical", "social", "digital", "bpm", "watch_vad")

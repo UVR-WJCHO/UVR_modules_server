@@ -2,7 +2,7 @@
 
 HL2 앱은 comm_hub 에 직접 붙는다. 와치와 폰은 각자 프로토콜밖에 모르고 앱도 바꾸지 않기로
 했다. 그래서 기기별 프로토콜을 받아 comm_hub 로 올리는 어댑터를 둔다. 와치와 폰은 서로 다른
-HL2 와 쓰일 수 있어 진입점을 나눈다.
+HL2 와 쓰일 수 있어 진입점을 나눈다. 둘 다 `--device` 로 짝인 HL2 를 정한다.
 
 | 어댑터 | 진입점 | 받는 방식 | 올리는 keyword |
 |---|---|---|---|
@@ -13,13 +13,18 @@ HL2 와 쓰일 수 있어 진입점을 나눈다.
 
 ```bash
 python comm_hub.py
-python main_watchbridge.py                       # 와치. --ws-port 8765 기본
-python main_watchbridge.py --no-raw-audio        # WATCH_AUDIO 는 안 올리고 WATCH_VAD 만
+python main_watchbridge.py --device HoloLens2_B  # 와치. --ws-port 8765 기본
+python main_watchbridge.py --device HoloLens2_B --no-raw-audio   # WATCH_AUDIO 는 안 올리고 WATCH_VAD 만
 python main_phonebridge.py --device HoloLens2_A  # 폰. --tcp-port 8777 기본
 ```
 
-`--device` 는 폰과 연동할 HL2 의 clientIdentity 다. `HL2_TO_PHONE` 은 그 기기가 보낸 것만 폰에 넘긴다.
-주지 않으면 모든 HL2 의 것을 넘긴다.
+`--device` 는 와치·폰과 짝인 HL2 의 clientIdentity 다.
+
+- 두 bridge 모두 2 초마다 `DEVICE_PAIR`(`{"kind":"watch"/"phone","device":...}`)로 짝을 알린다
+  (`pair.py`). HQS(`main_all_hl2_receiver.py`)는 HL2 를 기기별로 계산하고, 와치 값과 폰 터치
+  (`PHONE_ACTIVITY`)를 짝 기기의 HQS 에만 쓴다. 알림이 6 초 끊기면 짝이 없는 것으로 본다.
+- 폰 bridge 는 `HL2_TO_PHONE` 도 그 기기가 보낸 것만 폰에 넘긴다. 주지 않으면 모든 HL2 의 것을 넘긴다.
+- `--device` 를 주지 않으면 짝을 알리지 않으므로 와치·폰 값은 어느 기기의 HQS 에도 쓰이지 않는다.
 
 와치·폰 앱 화면에서 서버 IP 를 이 PC 로 바꾼다. 포트는 앱 기본값(8765 / 8777) 그대로다.
 
@@ -51,6 +56,7 @@ python main_phonebridge.py --device HoloLens2_A  # 폰. --tcp-port 8777 기본
 형식을 받는다.
 
 - `WATCH_HR`, `WATCH_ACTIVITY`, `WATCH_AUDIO` — 와치 메시지 원문
+- `DEVICE_PAIR` — 짝인 HL2. 위 실행 절 참고
 - `WATCH_VAD` — `{"type":"vad","is_speaking":bool,"timestamp":ms}`. webrtcvad(aggressiveness 2)
   결과가 **바뀔 때만** 올린다. 연결마다 따로 추적하므로 와치가 둘이어도 섞이지 않는다.
 

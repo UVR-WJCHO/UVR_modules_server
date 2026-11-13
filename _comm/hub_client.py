@@ -48,6 +48,7 @@ KW_PHONE_ACTIVITY = b"PHONE_ACTIVITY"  # 폰 -> 서버. 1 초마다 터치 요�
 KW_HL2_SCENE = b"HL2_SCENE"          # HL2 -> 서버. 기기 월드 기준 공유 콘텐츠 자세 JSON (HL2_SCENE_PROTOCOL.md)
 KW_HL2_MODE = b"HL2_MODE"            # 서버 -> HL2. 사용자 상태 모드 JSON {target_device_id, mode: FOCUS / MOVING / TALKING / NONE}
 KW_HL2_UI = b"HL2_UI"                # 서버 -> HL2. HQS 패널 차원 값 JSON (type / source / value / timestamp)
+KW_DEVICE_PAIR = b"DEVICE_PAIR"      # bridge -> 서버. 와치·폰이 짝인 HL2. JSON {kind: watch / phone, device: clientIdentity}
 
 RECV_TIMEOUT_MS = 500                # rx 소켓 타임아웃. 종료 신호를 확인할 주기
 
@@ -131,10 +132,15 @@ class HubClient:
                         self.n_dropped += 1
                     except Empty:
                         pass
-                self.q.put(data)
+                self.q.put((src, data))
 
     def get_latest(self, timeout: float = 1.0) -> bytes | None:
         """가장 최근에 도착한 본문. 없으면 None."""
+        item = self.get_latest_from(timeout)
+        return None if item is None else item[1]
+
+    def get_latest_from(self, timeout: float = 1.0) -> tuple[bytes, bytes] | None:
+        """get_latest 와 같되 (source, 본문) 을 준다. 여러 기기의 것을 받아 기기별로 나눌 때 쓴다."""
         try:
             return self.q.get(timeout=timeout)
         except Empty:

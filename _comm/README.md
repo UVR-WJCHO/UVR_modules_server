@@ -55,8 +55,9 @@ hub.close()
 | `KW_PHONE_TO_HL2` | `PHONE_TO_HL2` | 폰 -> HL2. RoverHandoff NetMessage JSON. bridge 가 올린다 |
 | `KW_HL2_TO_PHONE` | `HL2_TO_PHONE` | HL2 -> 폰. 같은 형식. bridge 가 받아 폰에 TCP 로 보낸다 |
 | `KW_HL2_SCENE` | `HL2_SCENE` | HL2 -> 서버. 기기별 로버 자세(`rover_pose` JSON). 다중 기기 정합용. 구독자 아직 없음. [HL2_SCENE_PROTOCOL.md](HL2_SCENE_PROTOCOL.md) |
-| `KW_HL2_MODE` | `HL2_MODE` | 서버 -> HL2. 사용자 상태 모드 JSON `{"target_device_id","mode"}`, mode 는 `FOCUS` / `MOVING` / `TALKING` / `NONE`. `main_all_hl2_receiver.py --hqs` 가 1 초마다 올린다. [HQS_PROTOCOL.md](HQS_PROTOCOL.md) |
-| `KW_HL2_UI` | `HL2_UI` | 서버 -> HL2. HQS 패널 차원 값 JSON `{"target_device_id","type","source","value","timestamp","highlight"}`. `main_all_hl2_receiver.py --hqs` 가 값이 바뀔 때 올린다. [HQS_PROTOCOL.md](HQS_PROTOCOL.md) |
+| `KW_HL2_MODE` | `HL2_MODE` | 서버 -> HL2. 사용자 상태 모드 JSON `{"target_device_id","mode"}`, mode 는 `FOCUS` / `MOVING` / `TALKING` / `NONE`. `main_all_hl2_receiver.py` 가 기기마다 1 초마다 올린다. [HQS_PROTOCOL.md](HQS_PROTOCOL.md) |
+| `KW_HL2_UI` | `HL2_UI` | 서버 -> HL2. HQS 패널 차원 값 JSON `{"target_device_id","type","source","value","timestamp","highlight"}`. `main_all_hl2_receiver.py` 가 기기마다 값이 바뀔 때 올린다. [HQS_PROTOCOL.md](HQS_PROTOCOL.md) |
+| `KW_DEVICE_PAIR` | `DEVICE_PAIR` | bridge -> 서버. 와치·폰이 짝인 HL2 JSON `{"kind":"watch"/"phone","device":clientIdentity}`. `main_watchbridge.py` / `main_phonebridge.py` 가 `--device` 를 2 초마다 올리고, `main_all_hl2_receiver.py` 는 와치·폰 값을 그 기기의 HQS 에만 쓴다 |
 
 ## 환경
 

@@ -19,19 +19,22 @@ DATA_REPLY)을 사용하며, hl2_data_pb2(HL2SensorPacket)로 depth 및 확장 �
     python hl2_receiver.py --save out_dir  # 프레임을 이미지로 저장하며 확인
     python hl2_receiver.py --host <IP>     # 허브가 다른 PC에 있을 때
 
-사용자 상태 추정(modules/modules_HQS.py):
-    python main_all_hl2_receiver.py --hqs                         # 상태·요소를 RGB 창에 표시
-    --hqs 는 상태를 HL2_MODE(JSON {"target_device_id", "mode": FOCUS / MOVING / TALKING / NONE})로 1 초마다 올린다.
-    HL2_MODE / HL2_UI / HL2_CONTROL 의 target_device_id 는 --device 값이다(_comm/TARGET_DEVICE_PROTOCOL.md).
-    또 WATCH_HR / WATCH_ACTIVITY / PHONE_ACTIVITY 를 받아 HQS 패널 값(JSON)을 HL2_UI 로 올린다.
+사용자 상태 추정(modules/modules_HQS.py). 기본으로 켜져 있고 --no-hqs 면 수신 뷰어로만 돈다:
+    python main_all_hl2_receiver.py                               # 상태·요소를 RGB 창에 표시
+    HL2 여러 대가 comm_hub 를 같이 쓴다. HL2DATA 의 source(HL2 앱의 clientIdentity)마다 HQS 를 따로 두고,
+    처음 들어온 기기는 그때 만든다. 기기 수와 ID 를 미리 정하지 않는다. --device 를 주면 그 기기만 처리한다.
+    HQS 는 기기마다 상태를 HL2_MODE(JSON {"target_device_id", "mode": FOCUS / MOVING / TALKING / NONE})로
+    1 초마다 올린다. HL2_MODE / HL2_UI / HL2_CONTROL 의 target_device_id 는 그 기기다(_comm/TARGET_DEVICE_PROTOCOL.md).
+    또 WATCH_HR / WATCH_ACTIVITY / PHONE_ACTIVITY 를 받아 HQS 패널 값(JSON)을 HL2_UI 로 올린다. 와치·폰 값은
+    bridge 가 DEVICE_PAIR 로 알린 짝 기기(main_watchbridge.py / main_phonebridge.py 의 --device)에만 쓴다.
     WATCH_VAD 는 패널에 쓰지 않고 프로파일에만 쌓는다.
-    python main_all_hl2_receiver.py --hqs --start-posture standing
-    python main_all_hl2_receiver.py --hqs --general               # 상태 우선순위 없이 점수로 고른다
-    python main_all_hl2_receiver.py --hqs --profile output/hqs/profiles/A.json   # A 의 프로파일에 쌓는다
-    --hqs 는 패널 값과 모드를 사용자 프로파일(modules_HQS_profile)에 1 초마다 더한다. 파일이 있으면 이어 쌓고,
-    없으면 새로 만든다. --profile 을 주지 않으면 output/hqs/profiles/default.json 이다.
-    python main_all_hl2_receiver.py --record output/hqs/s1.hl2rec # 원본 패킷 녹화 (+ s1.hl2rec.audio)
-    --hqs 는 목소리 판정을 위해 HL2_CONTROL 로 마이크(HL2_AUDIO)를 요청한다. --no-voice 로 끈다.
+    python main_all_hl2_receiver.py --start-posture standing
+    python main_all_hl2_receiver.py --general                     # 상태 우선순위 없이 점수로 고른다
+    HQS 는 패널 값과 모드를 기기마다 사용자 프로파일(modules_HQS_profile)에 1 초마다 더한다.
+    파일은 output/hqs/profiles/<clientIdentity>.json 이고, 있으면 이어 쌓고 없으면 새로 만든다.
+    python main_all_hl2_receiver.py --record output/hqs/s1.hl2rec --device HoloLens2_B
+                                                                  # 원본 패킷 녹화 (+ s1.hl2rec.audio). 기기 하나만
+    HQS 는 목소리 판정을 위해 HL2_CONTROL 로 마이크(HL2_AUDIO)를 요청한다. --no-voice 로 끈다.
     HL2_CONTROL 은 켤 스트림 전체를 한 번에 정하므로, 레이어를 요청하는 main_adaptiveMM 과 동시에
     돌리면 서로의 요청을 덮어쓴다.
     python modules/modules_HQS.py --replay output/hqs/s1.hl2rec --gui   # 녹화본 재생
@@ -282,14 +285,54 @@ def render_overlay(pkt, rgb, depth):
     return vis
 
 
-def consumer_loop(args, hqs=None, rec=None, panel=None, ui=None):
-    frame_id = 0
-    if hqs is not None:
+class Device:
+    """HL2 한 대(clientIdentity)의 상태. HL2DATA 를 처음 보낸 기기마다 하나 만든다. --no-hqs 면 HQS 부분은 None."""
+
+    def __init__(self, name, args, where):
+        self.name = name                    # 출력의 target_device_id
+        self.frame_id = 0
+        self.hqs = self.panel = self.profile = None
+        if args.hqs:
+            from modules_HQS import HQS, HQSPanel
+            from modules_HQS_profile import PROFILE_DIR, HQSProfile
+            self.hqs = HQS(start_posture=args.start_posture, general=args.general)
+            self.panel = HQSPanel(name)
+            self.profile = HQSProfile(os.path.join(PROFILE_DIR, name + ".json"), where)
+        line = f"[{name}] 새 기기"
+        if self.profile is not None:
+            line += f"  프로파일 {self.profile.path} (" + (
+                "새로 만듦" if self.profile.is_new else f"이어 쌓음, {self.profile.hours():.1f} h") + ")"
+        print(line, flush=True)
+
+
+class Devices:
+    """clientIdentity -> Device. 수신·오디오·모드·와치 스레드가 함께 본다."""
+
+    def __init__(self, args, where):
+        self.args, self.where = args, where
+        self._d = {}
+        self._lock = threading.Lock()
+
+    def get(self, name, create=False):
+        with self._lock:
+            d = self._d.get(name)
+            if d is None and create and name:
+                d = self._d[name] = Device(name, self.args, self.where)
+            return d
+
+    def all(self):
+        with self._lock:
+            return list(self._d.values())
+
+
+def consumer_loop(args, devices, rec=None, ui=None):
+    if args.hqs:
         from modules_HQS import draw as hqs_draw
     if rec is not None:
         from modules_HQS import REC_HEADER
     while True:
-        _, _kw, _src, _fid, data = task_queue.get()
+        _, _kw, src, _fid, data = task_queue.get()
+        d = devices.get(src.decode(errors="replace"), create=True)
         if rec is not None:
             rec.write(REC_HEADER.pack(time.time(), len(data)) + data)
             rec.flush()
@@ -299,14 +342,14 @@ def consumer_loop(args, hqs=None, rec=None, panel=None, ui=None):
         rgb = decode_rgb(pkt.image_data)
         depth = decode_depth(pkt.depth_data)
         r = None
-        if hqs is not None:
+        if d.hqs is not None:
             h, w = rgb.shape[:2] if rgb is not None else (pkt.depth_height or 360, pkt.depth_width or 640)
-            r = hqs.update(pkt, rgb, intrinsics(pkt, w, h), depth)
+            r = d.hqs.update(pkt, rgb, intrinsics(pkt, w, h), depth)
             for e in r.events:
-                print(f"[HQS] t={r.t:.2f} {e}", flush=True)
-            for ev in panel.on_hqs(r):
-                ui.send(ev)
-        print(f"[#{frame_id}] " + summarize(pkt, rgb, depth)
+                print(f"[HQS {d.name}] t={r.t:.2f} {e}", flush=True)
+            for ev in d.panel.on_hqs(r):
+                ui.send(d.name, ev)
+        print(f"[{d.name} #{d.frame_id}] " + summarize(pkt, rgb, depth)
               + (f"  hqs={r.state}" if r is not None else ""), flush=True)
 
         vis = None
@@ -314,34 +357,40 @@ def consumer_loop(args, hqs=None, rec=None, panel=None, ui=None):
             vis = render_overlay(pkt, rgb, depth)
             if r is not None:
                 hqs_draw(vis, r)
-            cv2.imshow("hl2_rgb", vis)
+            cv2.imshow(f"hl2_rgb {d.name}", vis)
             cv2.waitKey(1)
 
         if args.save:
             os.makedirs(args.save, exist_ok=True)
             if rgb is not None:
-                cv2.imwrite(f"{args.save}/rgb_{frame_id:05d}.png", vis if vis is not None else rgb)
+                cv2.imwrite(f"{args.save}/{d.name}_rgb_{d.frame_id:05d}.png", vis if vis is not None else rgb)
             if depth is not None:
-                cv2.imwrite(f"{args.save}/depth_{frame_id:05d}.png", depth)  # 16bit 원본 보존
+                cv2.imwrite(f"{args.save}/{d.name}_depth_{d.frame_id:05d}.png", depth)  # 16bit 원본 보존
 
-        frame_id += 1
+        d.frame_id += 1
 
 
 AUDIO_CONTROL_PERIOD_S = 5.0   # 기기는 15 s 동안 제어를 못 받으면 마이크를 놓는다(HL2_CONTROL 규약)
 
 
-def audio_loop(hub, hqs, rec_audio, target):
-    """HL2_AUDIO 를 받아 HQS 의 목소리 판정에 넣고, 녹화 중이면 그대로 남긴다. 마이크는 target 기기에만 요청한다."""
+def audio_loop(hub, devices, rec_audio):
+    """HL2_AUDIO 를 보낸 기기의 HQS 목소리 판정에 넣고, 녹화 중이면 그대로 남긴다.
+    마이크는 HL2DATA 가 들어온 기기마다 그 기기를 target 으로 요청한다."""
     import hl2_sensors_pb2 as sensproto
     from modules_HQS import REC_HEADER
-    n, t_ctrl = 0, 0.0
+    started, t_ctrl = set(), 0.0
     while True:
         if time.time() - t_ctrl >= AUDIO_CONTROL_PERIOD_S:   # 끊기지 않게 주기적으로 다시 요청한다
-            hub.send(sensproto.HL2Control(send_audio=True, target_device_id=target).SerializeToString())
+            for d in devices.all():
+                hub.send(sensproto.HL2Control(send_audio=True, target_device_id=d.name).SerializeToString())
             t_ctrl = time.time()
-        data = hub.get_latest(timeout=0.5)
-        if data is None:
+        item = hub.get_latest_from(timeout=0.5)
+        if item is None:
             continue
+        d = devices.get(item[0].decode(errors="replace"))
+        if d is None:                                         # HL2DATA 를 아직 보내지 않은 기기
+            continue
+        data = item[1]
         if rec_audio is not None:
             rec_audio.write(REC_HEADER.pack(time.time(), len(data)) + data)
             rec_audio.flush()
@@ -349,34 +398,36 @@ def audio_loop(hub, hqs, rec_audio, target):
         a.ParseFromString(data)
         if a.is_aac or not a.audio:
             continue
-        hqs.update_audio(a.audio, a.sample_rate, a.start_timestamp / 1e9, max(1, a.channels))
-        n += 1
-        if n == 1:
-            print(f"[HQS] 오디오 수신 시작 ({a.sample_rate} Hz, {a.channels} ch)", flush=True)
+        d.hqs.update_audio(a.audio, a.sample_rate, a.start_timestamp / 1e9, max(1, a.channels))
+        if d.name not in started:
+            started.add(d.name)
+            print(f"[HQS {d.name}] 오디오 수신 시작 ({a.sample_rate} Hz, {a.channels} ch)", flush=True)
 
 
 MODE_PERIOD_S = 1.0   # HL2_MODE 를 보내는 주기
 MODE_REPEAT_S = 5.0   # 같은 모드가 이어지면 이 간격으로만 다시 보낸다. 그 사이는 NONE
 
 
-def mode_loop(hub, hqs, target):
-    """HQS 상태를 HL2_MODE 로 1 초마다 보낸다. 상태가 바뀐 순간 그 모드를 보내고, 이어지는 동안은
+def mode_loop(hub, devices):
+    """기기마다 HQS 상태를 HL2_MODE 로 1 초마다 보낸다. 상태가 바뀐 순간 그 모드를 보내고, 이어지는 동안은
     MODE_REPEAT_S 마다 다시 보낸다. 나머지 틱과 어느 상태에도 들지 않을 때는 NONE 이다.
-    본문은 {"target_device_id": target, "mode": ...} JSON 이다."""
+    본문은 {"target_device_id": 기기, "mode": ...} JSON 이다."""
     from modules_HQS import NONE_STATE
     every = round(MODE_REPEAT_S / MODE_PERIOD_S)
-    prev, ticks = NONE_STATE, every
+    last = {}                                   # 기기 -> (직전 상태, 마지막으로 모드를 보낸 뒤 틱 수)
     while True:
-        cur = hqs.state
-        ticks += 1
-        if cur != NONE_STATE and (cur != prev or ticks >= every):
-            out, ticks = cur, 0
-        else:
-            out = NONE_STATE
-        prev = cur
-        hub.send(json.dumps({"target_device_id": target, "mode": out}, separators=(",", ":")).encode())
-        if out != NONE_STATE:
-            print(f"[HQS] HL2_MODE {out}", flush=True)
+        for d in devices.all():
+            prev, ticks = last.get(d.name, (NONE_STATE, every))
+            cur = d.hqs.state
+            ticks += 1
+            if cur != NONE_STATE and (cur != prev or ticks >= every):
+                out, ticks = cur, 0
+            else:
+                out = NONE_STATE
+            last[d.name] = (cur, ticks)
+            hub.send(json.dumps({"target_device_id": d.name, "mode": out}, separators=(",", ":")).encode())
+            if out != NONE_STATE:
+                print(f"[HQS {d.name}] HL2_MODE {out}", flush=True)
         time.sleep(MODE_PERIOD_S)
 
 
@@ -384,15 +435,17 @@ PROFILE_PERIOD_S = 1.0    # 프로파일에 현재 값을 더하는 주기. 한 
 PROFILE_SAVE_S = 60.0     # 이 간격과 끝날 때 프로파일 파일에 쓴다
 
 
-def profile_loop(profile, hqs, panel):
-    """HQS 패널 값과 모드를 1 초마다 사용자 프로파일에 더하고 주기적으로 저장한다."""
+def profile_loop(devices):
+    """기기마다 HQS 패널 값과 모드를 1 초마다 그 기기의 프로파일에 더하고 주기적으로 저장한다."""
     t_save = time.time()
     while True:
         time.sleep(PROFILE_PERIOD_S)
         now = time.time()
-        profile.add(now, hqs.state, panel.snapshot())
+        for d in devices.all():
+            d.profile.add(now, d.hqs.state, d.panel.snapshot())
         if now - t_save >= PROFILE_SAVE_S:
-            profile.save()
+            for d in devices.all():
+                d.profile.save()
             t_save = now
 
 
@@ -400,39 +453,74 @@ class UiSender:
     """HQS 패널 이벤트를 HL2_UI 로 올린다. 수신 스레드 여럿이 함께 쓰므로 소켓 하나를 잠가서 쓴다.
     이벤트마다 받을 기기(target_device_id)를 붙인다."""
 
-    def __init__(self, hub, target):
+    def __init__(self, hub):
         self.hub = hub
-        self.target = target
         self.lock = threading.Lock()
 
-    def send(self, ev):
+    def send(self, target, ev):
         with self.lock:
-            self.hub.send(json.dumps({"target_device_id": self.target, **ev}, separators=(",", ":")).encode())
-        print(f"[HQS] HL2_UI {ev['type']}={ev['value']} ({ev['source']})"
+            self.hub.send(json.dumps({"target_device_id": target, **ev}, separators=(",", ":")).encode())
+        print(f"[HQS {target}] HL2_UI {ev['type']}={ev['value']} ({ev['source']})"
               + ("  HIGHLIGHT" if ev["highlight"] else ""), flush=True)
 
 
-def watch_loop(hub, kind, panel, ui):
-    """기기 채널 하나(WATCH_HR / WATCH_ACTIVITY / WATCH_VAD / PHONE_ACTIVITY)를 받아 패널 이벤트로 바꿔 올린다."""
+class Pairs:
+    """bridge 가 DEVICE_PAIR 로 알린 와치·폰의 짝 기기. 알림이 PAIR_TIMEOUT_S 끊기면(bridge 꺼짐) 짝이 없다."""
+
+    def __init__(self):
+        from devicebridge.pair import PAIR_TIMEOUT_S
+        self.timeout = PAIR_TIMEOUT_S
+        self._p = {}                            # "watch" / "phone" -> (기기, 마지막 알림 시각)
+        self._lock = threading.Lock()
+
+    def run(self, hub):
+        while True:
+            data = hub.get_latest(timeout=1.0)
+            if data is None:
+                continue
+            try:
+                msg = json.loads(data)
+                kind, dev = str(msg["kind"]), str(msg["device"])
+            except (ValueError, TypeError, KeyError) as e:
+                print(f"[HQS] DEVICE_PAIR 메시지 무시: {e}", flush=True)
+                continue
+            with self._lock:
+                prev = self._p.get(kind)
+                self._p[kind] = (dev, time.time())
+            if prev is None or prev[0] != dev:
+                print(f"[HQS] {kind} 짝 기기: {dev}", flush=True)
+
+    def device(self, kind):
+        with self._lock:
+            v = self._p.get(kind)
+        return v[0] if v is not None and time.time() - v[1] < self.timeout else None
+
+
+def watch_loop(hub, kind, devices, pairs, ui):
+    """기기 채널 하나(WATCH_HR / WATCH_ACTIVITY / WATCH_VAD / PHONE_ACTIVITY)를 받아 짝 기기의 패널 이벤트로
+    바꿔 올린다. 짝이 없거나 짝 기기가 아직 HL2DATA 를 보내지 않았으면 버린다."""
+    owner = "phone" if kind == "phone" else "watch"
     while True:
         data = hub.get_latest(timeout=1.0)
         if data is None:
             continue
+        d = devices.get(pairs.device(owner))
+        if d is None:
+            continue
         try:
             msg = json.loads(data)
-            ev = panel.on_phone(msg) if kind == "phone" else panel.on_watch(kind, msg)
+            ev = d.panel.on_phone(msg) if kind == "phone" else d.panel.on_watch(kind, msg)
         except (ValueError, TypeError, AttributeError) as e:      # 깨진 메시지 하나로 채널을 멈추지 않는다
-            print(f"[HQS] {kind} 메시지 무시: {e}", flush=True)
+            print(f"[HQS {d.name}] {kind} 메시지 무시: {e}", flush=True)
             continue
         if ev is not None:
-            ui.send(ev)
+            ui.send(d.name, ev)
 
 
 def run(args):
     identity = args.identity.encode()
     keyword = args.keyword.encode()
     device = args.device.encode() if args.device else None
-    target = args.device or ""      # 출력의 target_device_id. 비어 있으면 모든 HL2 가 반영한다
 
     ctx = zmq.Context()
     sock = ctx.socket(zmq.DEALER)
@@ -443,48 +531,50 @@ def run(args):
     sock.send_multipart([b"", b"RECV_REG", keyword, identity, b"ALL"])
     print(f"{identity.decode()} :: connected tcp://{args.host}:{args.port}, kw={keyword.decode()}", flush=True)
 
-    hqs = rec = panel = ui = profile = None
+    rec = ui = where = None
     hubs = []
     if args.hqs:
-        from modules_HQS import HQS, HQSPanel
-        from modules_HQS_profile import DEFAULT_PROFILE, HQSProfile, locate
-        from hub_client import (HubClient, KW_HL2_MODE, KW_HL2_UI, KW_PHONE_ACTIVITY, KW_WATCH_ACTIVITY,
-                                KW_WATCH_HR, KW_WATCH_VAD)
-        hqs = HQS(start_posture=args.start_posture, general=args.general)
-        panel = HQSPanel()
-        profile = HQSProfile(args.profile or DEFAULT_PROFILE, locate())
-        print(f"[PROFILE] {profile.path} ({'새로 만듦' if profile.is_new else f'이어 쌓음, {profile.hours():.1f} h'})"
-              f"  장소 {profile.where['place']} ({profile.where['tz'] or '서버 시간대'})", flush=True)
+        from modules_HQS_profile import locate
+        from hub_client import (HubClient, KW_DEVICE_PAIR, KW_HL2_MODE, KW_HL2_UI, KW_PHONE_ACTIVITY,
+                                KW_WATCH_ACTIVITY, KW_WATCH_HR, KW_WATCH_VAD)
+        where = locate()
+        print(f"[PROFILE] 장소 {where['place']} ({where['tz'] or '서버 시간대'})", flush=True)
         ui_hub = HubClient(args.host, args.port, recv_kw=None, result_kw=KW_HL2_UI, identity=identity + b"_UI")
-        ui = UiSender(ui_hub, target)
+        ui = UiSender(ui_hub)
         hubs.append(ui_hub)
         print(f"[HQS] ready (start_posture={args.start_posture}, general={args.general})", flush=True)
+    devices = Devices(args, where)
     if args.record:
         os.makedirs(os.path.dirname(os.path.abspath(args.record)), exist_ok=True)
         rec = open(args.record, "ab")
         print(f"[REC] {args.record}", flush=True)
-    threading.Thread(target=consumer_loop, args=(args, hqs, rec, panel, ui), daemon=True).start()
+    threading.Thread(target=consumer_loop, args=(args, devices, rec, ui), daemon=True).start()
 
     audio_hub = None
-    if hqs is not None:
+    if args.hqs:
         mode_hub = HubClient(args.host, args.port, recv_kw=None, result_kw=KW_HL2_MODE,
                              identity=identity + b"_MODE")
         hubs.append(mode_hub)
-        threading.Thread(target=mode_loop, args=(mode_hub, hqs, target), daemon=True).start()
-        threading.Thread(target=profile_loop, args=(profile, hqs, panel), daemon=True).start()
+        threading.Thread(target=mode_loop, args=(mode_hub, devices), daemon=True).start()
+        threading.Thread(target=profile_loop, args=(devices,), daemon=True).start()
+        pairs = Pairs()
+        pair_hub = HubClient(args.host, args.port, recv_kw=KW_DEVICE_PAIR, identity=identity + b"_" + KW_DEVICE_PAIR,
+                             queue_size=8)
+        hubs.append(pair_hub)
+        threading.Thread(target=pairs.run, args=(pair_hub,), daemon=True).start()
         # 수신 등록은 identity 마다 하나이고 HubClient 는 keyword 를 구분해 주지 않아 채널마다 따로 둔다
         for kw, kind in ((KW_WATCH_HR, "hr"), (KW_WATCH_ACTIVITY, "activity"), (KW_WATCH_VAD, "vad"),
                          (KW_PHONE_ACTIVITY, "phone")):
             hub = HubClient(args.host, args.port, recv_kw=kw, identity=identity + b"_" + kw, queue_size=32)
             hubs.append(hub)
-            threading.Thread(target=watch_loop, args=(hub, kind, panel, ui), daemon=True).start()
-    if hqs is not None and not args.no_voice:
+            threading.Thread(target=watch_loop, args=(hub, kind, devices, pairs, ui), daemon=True).start()
+    if args.hqs and not args.no_voice:
         from hub_client import HubClient, KW_HL2_AUDIO, KW_HL2_CONTROL
         # 오디오는 연속 스트림이라 버리면 안 된다. 수신 등록은 identity 마다 하나라 따로 둔다
         audio_hub = HubClient(args.host, args.port, recv_kw=KW_HL2_AUDIO, result_kw=KW_HL2_CONTROL,
                               identity=identity + b"_AUDIO", queue_size=256, from_source=device)
         rec_audio = open(args.record + ".audio", "ab") if args.record else None
-        threading.Thread(target=audio_loop, args=(audio_hub, hqs, rec_audio, target), daemon=True).start()
+        threading.Thread(target=audio_loop, args=(audio_hub, devices, rec_audio), daemon=True).start()
 
     try:
         while True:
@@ -498,12 +588,14 @@ def run(args):
                 _, _, kw, src, fid, data = msg
                 task_queue.put((None, kw, src, fid, data))
     finally:
-        if profile is not None:
-            profile.save()
-            print(f"[PROFILE] 저장 {profile.path} ({profile.hours():.1f} h)", flush=True)
+        for d in devices.all():
+            if d.profile is not None:
+                d.profile.save()
+                print(f"[PROFILE] 저장 {d.profile.path} ({d.profile.hours():.1f} h)", flush=True)
         if audio_hub is not None:                            # 끝날 때 마이크를 바로 놓게 한다
             import hl2_sensors_pb2 as sensproto
-            audio_hub.send(sensproto.HL2Control(send_audio=False, target_device_id=target).SerializeToString())
+            for d in devices.all():
+                audio_hub.send(sensproto.HL2Control(send_audio=False, target_device_id=d.name).SerializeToString())
             time.sleep(0.2)
             audio_hub.close()
         for hub in hubs:
@@ -517,21 +609,24 @@ if __name__ == "__main__":
     ap.add_argument("--keyword", default=DEFAULT_KEYWORD.decode())
     ap.add_argument("--identity", default=DEFAULT_IDENTITY.decode())
     ap.add_argument("--device", default=None,
-                    help="처리할 HL2 의 clientIdentity(HL2DATA·HL2_AUDIO 의 source). 주지 않으면 모든 기기를 섞어 받는다")
+                    help="이 HL2(clientIdentity, HL2DATA·HL2_AUDIO 의 source)만 처리한다. "
+                         "주지 않으면 들어오는 기기마다 따로 처리한다")
     ap.add_argument("--no-gui", action="store_true", help="창 없이 콘솔 통계만")
     ap.add_argument("--save", default=None, help="프레임 저장 디렉토리")
-    ap.add_argument("--hqs", action="store_true", help="사용자 상태 추정(modules_HQS)을 켠다")
+    ap.add_argument("--hqs", action=argparse.BooleanOptionalAction, default=True,
+                    help="사용자 상태 추정(modules_HQS). 기본으로 켜져 있고 --no-hqs 면 수신 뷰어로만 돈다")
     ap.add_argument("--start-posture", default="seated", choices=("seated", "standing"),
                     help="HQS: 시작할 때 자세. 머리 높이가 상대값이라 필요하다")
     ap.add_argument("--general", action="store_true",
                     help="HQS: 상태 우선순위(STATES 순서) 대신 성립하는 상태 중 점수가 가장 높은 것을 고른다")
     ap.add_argument("--record", default=None,
-                    help="원본 HL2DATA 패킷을 이 파일에 이어 쓴다(오디오는 <파일>.audio). modules_HQS.py --replay 로 재생")
+                    help="원본 HL2DATA 패킷을 이 파일에 이어 쓴다(오디오는 <파일>.audio). modules_HQS.py --replay 로 재생. "
+                         "기기 하나만 녹화하므로 --device 와 함께 쓴다")
     ap.add_argument("--no-voice", action="store_true",
                     help="HQS: 마이크를 요청하지 않는다. voice 요소는 0 이 된다")
-    ap.add_argument("--profile", default=None,
-                    help="HQS: 사용자 프로파일 JSON. 있으면 이어 쌓고 없으면 만든다(기본 output/hqs/profiles/default.json)")
     args = ap.parse_args()
+    if args.record and not args.device:
+        ap.error("--record 는 기기 하나만 녹화한다. --device 를 함께 준다")
     try:
         run(args)
     except KeyboardInterrupt:

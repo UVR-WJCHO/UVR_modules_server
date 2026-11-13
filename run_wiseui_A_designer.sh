@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 폰과 HL2 한 대를 잇는 phone bridge 를 띄운다. comm_hub.py 는 따로 먼저 띄워 둔다. Ctrl+C 로 끈다.
+# 폰과 HL2 한 대를 잇는 phone bridge 를 띄운다. HQS 는 폰 터치를 이 기기에만 쓴다.
+# comm_hub.py 와 receiver(main_all_hl2_receiver.py)는 따로 먼저 띄워 둔다. Ctrl+C 로 끈다.
 #   ./run_wiseui_A_designer.sh                 # HoloLens2_A
 #   ./run_wiseui_A_designer.sh HoloLens2_D     # 다른 기기. HL2 앱의 clientIdentity
 cd "$(dirname "$0")"

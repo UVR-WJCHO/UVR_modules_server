@@ -434,10 +434,11 @@ class HQSPanel:
     Digital 은 폰 터치(on_phone)만 본다. 최근 PHONE_WINDOW 개 보고 중 터치가 있던 보고의 비율이고, 바뀔 때
     낸다. 터치 없이 화면만 보는 사용은 잡지 못한다. 폰 보고가 PHONE_TIMEOUT_S 끊기면 내지 않는다.
     하이라이트는 HIGHLIGHT 로 type 마다 따로 판정한다.
-    snapshot() 은 지금 HL2 에 나가 있는 값이다(프로파일용).
+    snapshot() 은 지금 HL2 에 나가 있는 값이다(프로파일용). name 은 로그 앞에 붙일 기기 이름이다.
     """
 
-    def __init__(self):
+    def __init__(self, name: str = ""):
+        self._tag = f"[HQS {name}]" if name else "[HQS]"
         self._lock = threading.Lock()
         self._speaking: Optional[bool] = None     # 와치 VAD 마지막 상태. bridge 가 바뀔 때만 보내므로 그대로 들고 있다
         self._social: Optional[float] = None
@@ -486,7 +487,7 @@ class HQSPanel:
             if now - self._t_phone >= PHONE_TIMEOUT_S:      # 처음이거나 끊겼다 돌아옴: 0 부터 다시 쌓는다
                 self._touch.clear()
                 self._hist.pop("digital", None)
-                print("[HQS] 폰 터치 수신 중", flush=True)
+                print(f"{self._tag} 폰 터치 수신 중", flush=True)
             self._t_phone, self._phone_ok = now, True
             self._touch.append(float(msg["active_ms"]) > 0)
             v = sum(self._touch) / PHONE_WINDOW
@@ -501,12 +502,12 @@ class HQSPanel:
             ok = now - self._t_watch < WATCH_TIMEOUT_S
             if ok != self._watch_ok:
                 self._watch_ok, self._physical_hqs = ok, None   # 와치가 끊기면 HL2 값을 바로 한 번 보낸다
-                print("[HQS] 와치 수신 중" if ok else
-                      f"[HQS] 와치 데이터가 {WATCH_TIMEOUT_S:.0f} s 없다(main_watchbridge 확인). "
+                print(f"{self._tag} 와치 수신 중" if ok else
+                      f"{self._tag} 와치 데이터가 {WATCH_TIMEOUT_S:.0f} s 없다(main_watchbridge 확인). "
                       "physical 은 HL2 머리 이동으로 대신하고 emotion 은 보내지 않는다", flush=True)
             if self._phone_ok and now - self._t_phone >= PHONE_TIMEOUT_S:
                 self._phone_ok = False
-                print(f"[HQS] 폰 보고(PHONE_ACTIVITY)가 {PHONE_TIMEOUT_S:.0f} s 없다. digital 은 보내지 않는다",
+                print(f"{self._tag} 폰 보고(PHONE_ACTIVITY)가 {PHONE_TIMEOUT_S:.0f} s 없다. digital 은 보내지 않는다",
                       flush=True)
             events = []
             v = 0.5 * (r.primitives["face"] + r.primitives["voice"])

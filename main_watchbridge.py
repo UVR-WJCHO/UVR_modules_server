@@ -10,9 +10,10 @@ comm_hub 로 올린다. 폰은 main_phonebridge.py 가 따로 맡는다.
 
 실행
     python comm_hub.py
-    python main_watchbridge.py           # 와치 앱 화면에서 서버 IP 를 이 PC 로 바꾼다
+    python main_watchbridge.py --device HoloLens2_B   # 와치 앱 화면에서 서버 IP 를 이 PC 로 바꾼다
 
 와치: WATCH_HR / WATCH_ACTIVITY / WATCH_AUDIO / WATCH_VAD 로 올라간다 (modules/devicebridge/watch.py).
+--device 기기와 짝임을 DEVICE_PAIR 로 알려, HQS 는 와치 값을 그 기기에만 쓴다(modules/devicebridge/pair.py).
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ sys.path.insert(0, os.path.join(_ROOT, "_comm"))
 sys.path.insert(0, _ROOT)
 
 from hub_client import HubClient, add_broker_args, KW_WATCH_HR          # noqa: E402
+from modules.devicebridge.pair import announce_pair                     # noqa: E402
 from modules.devicebridge.watch import WatchAdapter                     # noqa: E402
 
 IDENTITY = b"DEVICEBRIDGE_WATCH"    # 와치·폰 bridge 를 나누기 전과 같은 identity
@@ -45,8 +47,11 @@ async def _status_loop(adapter) -> None:
 async def _main(args) -> None:
     hub = HubClient(args.host, args.port, recv_kw=None, result_kw=KW_WATCH_HR, identity=IDENTITY)
     watch = WatchAdapter(hub, raw_audio=not args.no_raw_audio)
+    tasks = [watch.serve(args.ws_host, args.ws_port), _status_loop(watch)]
+    if args.device:
+        tasks.append(announce_pair(hub, "watch", args.device))
     try:
-        await asyncio.gather(watch.serve(args.ws_host, args.ws_port), _status_loop(watch))
+        await asyncio.gather(*tasks)
     finally:
         hub.close()
 
@@ -54,6 +59,8 @@ async def _main(args) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="와치를 comm_hub 에 붙인다")
     add_broker_args(ap)
+    ap.add_argument("--device", default=None,
+                    help="와치와 짝인 HL2 의 clientIdentity. HQS 는 와치 값을 이 기기에만 쓴다. 주지 않으면 어느 기기에도 쓰지 않는다")
     ap.add_argument("--ws-host", default="0.0.0.0", help="와치 WebSocket 수신 주소")
     ap.add_argument("--ws-port", type=int, default=8765, help="와치 WebSocket 포트 (와치 앱 기본값 8765)")
     ap.add_argument("--no-raw-audio", action="store_true",

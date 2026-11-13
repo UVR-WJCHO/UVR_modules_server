@@ -18,10 +18,10 @@ All importable packages live under `modules/`; each entry point adds `modules/` 
 ├── main_metaobjrecon.py       # Capture → reconstruct → align → metaobj (.glb + .json + teaser)
 ├── main_handtrack.py          # Hand tracking + gesture recognition
 ├── main_handtrack_forecast.py # Delay-compensated hand tracking (multi-horizon forecast)
-├── main_all_hl2_receiver.py   # HL2DATA viewer (RGB / depth / overlay); --hqs adds user state (HQS)
+├── main_all_hl2_receiver.py   # User state (HQS) for every headset + HL2DATA viewer (RGB / depth / overlay)
 ├── main_watchbridge.py        # Watch (WebSocket) → comm_hub bridge
 ├── main_phonebridge.py        # Phone (TCP) ↔ comm_hub bridge
-├── run_wiseui_B_developer.sh  # HQS + hand tracking + watch bridge for one headset (default HoloLens2_B)
+├── run_wiseui_B_developer.sh  # Hand tracking + watch bridge for one headset (default HoloLens2_B)
 ├── run_wiseui_A_designer.sh   # Phone bridge for one headset (default HoloLens2_A)
 │
 ├── modules/
@@ -211,14 +211,14 @@ python main_handtrack_forecast.py      # terminal 2
 
 ### 4. HL2 viewer and user state (`main_all_hl2_receiver.py`)
 
-Without options the receiver subscribes to `HL2DATA` and shows RGB with the hand, gaze and
-depth overlay. In this mode it is read-only and publishes nothing.
+The receiver subscribes to `HL2DATA` and shows RGB with the hand, gaze and depth overlay.
+With `--no-hqs` it stops there: read-only, publishing nothing.
 
 ```bash
-python main_all_hl2_receiver.py            # --no-gui for console only
+python main_all_hl2_receiver.py --no-hqs   # --no-gui for console only
 ```
 
-With `--hqs` it also runs the user-state module (`modules/modules_HQS.py`) and publishes two
+By default it also runs the user-state module (`modules/modules_HQS.py`) and publishes two
 channels to the HoloLens2:
 
 - `HL2_MODE` — JSON `{"target_device_id","mode"}` with mode `FOCUS`, `MOVING`, `TALKING` or `NONE`,
@@ -226,8 +226,11 @@ channels to the HoloLens2:
 - `HL2_UI` — HQS panel values (emotion / physical / social) as JSON, sent when a value changes,
   with a per-type `highlight` flag when the value changes sharply within a few seconds.
 
-Every output carries `target_device_id`, the `--device` the receiver was started with (empty without
-it); a headset applies only messages addressed to its `clientIdentity`, or to everyone when empty
+Several headsets can share the broker. One receiver serves all of them: it keeps a separate
+HQS state, panel and profile for each `clientIdentity` seen as the source of `HL2DATA`, created
+when that headset's first frame arrives, so the number and names of headsets need not be known in
+advance. Every output carries `target_device_id`, the headset it was computed for; a headset
+applies only messages addressed to its `clientIdentity`
 ([_comm/TARGET_DEVICE_PROTOCOL.md](_comm/TARGET_DEVICE_PROTOCOL.md)).
 
 To judge speech it requests the HL2 microphone over `HL2_CONTROL`. The wire format for the
@@ -236,25 +239,24 @@ headset side is specified in [_comm/HQS_PROTOCOL.md](_comm/HQS_PROTOCOL.md).
 ```bash
 conda activate uvr_integ
 python comm_hub.py --port 37001            # terminal 1
-python main_watchbridge.py                 # terminal 2   (watch; see below)
-python main_all_hl2_receiver.py --hqs      # terminal 3
+python main_all_hl2_receiver.py            # terminal 2   (one for every headset)
+python main_watchbridge.py --device HoloLens2_B   # terminal 3   (watch; see below)
 ```
 
-`./run_wiseui_B_developer.sh [clientIdentity]` starts the receiver with `--hqs`, `main_handtrack.py` and
-`main_watchbridge.py` for one headset (default `HoloLens2_B`) and stops all three with one Ctrl+C.
+`./run_wiseui_B_developer.sh [clientIdentity]` starts `main_handtrack.py` and `main_watchbridge.py` for
+one headset (default `HoloLens2_B`) and stops both with one Ctrl+C.
 `./run_wiseui_A_designer.sh [clientIdentity]` starts `main_phonebridge.py` for the headset paired with the
-phone (default `HoloLens2_A`).
+phone (default `HoloLens2_A`). Neither script starts the receiver; run it once beside `comm_hub.py`.
 
 | option | effect |
 |---|---|
-| `--device <clientIdentity>` | processes only that headset's `HL2DATA` and `HL2_AUDIO` when several headsets share the broker; without it every headset's data is mixed |
+| `--device <clientIdentity>` | processes only that headset's `HL2DATA` and `HL2_AUDIO`; without it every headset is processed separately |
 | `--start-posture standing` | the session starts standing (default `seated`); head height is relative, so the starting posture sets the reference |
-| `--record <file>` | appends raw `HL2DATA` packets to `<file>` and microphone chunks to `<file>.audio`; replay with `python modules/modules_HQS.py --replay <file>` |
+| `--record <file>` | appends raw `HL2DATA` packets to `<file>` and microphone chunks to `<file>.audio`; replay with `python modules/modules_HQS.py --replay <file>`. Records one headset, so it requires `--device` |
 | `--no-voice` | does not request the microphone; `TALKING` is then never reported |
 | `--general` | selects the qualifying state with the highest score instead of the fixed priority order |
-| `--profile <file>` | user profile to accumulate into (default `output/hqs/profiles/default.json`); see below |
 
-`HL2_CONTROL` sets the complete stream state on the headset, so running `--hqs` together
+`HL2_CONTROL` sets the complete stream state on the headset, so running HQS together
 with `main_adaptiveMM.py` makes the two overwrite each other's requests.
 
 **Dependence on the device bridges.** The modes are computed from HoloLens2 data alone, but
@@ -268,19 +270,26 @@ part of the panel comes from `main_watchbridge.py` and the phone link from `main
 | `HL2_UI` social | HL2 face and HL2 microphone | unchanged (the watch VAD only goes into the profile) |
 | phone ↔ HL2 (`PHONE_TO_HL2` / `HL2_TO_PHONE`) | unavailable | available (`main_phonebridge.py`) |
 
-`HL2_UI` digital does not depend on the bridge: the phone app sends a touch summary every second
-(`PHONE_ACTIVITY`) straight to `comm_hub`, and digital is the share of the last ten seconds with a
-touch. It is not sent while those reports are missing for more than 3 s.
+Watch and phone values go only to the headset each is paired with: the bridge started with
+`--device <clientIdentity>` announces that pairing on `DEVICE_PAIR` every 2 s, and the receiver
+feeds the watch or phone messages into that headset's panel only. The other headsets behave as
+"without the bridge". A bridge started without `--device`, or stopped for more than 6 s, pairs
+with no headset.
+
+`HL2_UI` digital comes from the phone app itself, which sends a touch summary every second
+(`PHONE_ACTIVITY`) straight to `comm_hub`; digital is the share of the last ten seconds with a
+touch. It goes only to the headset paired by `main_phonebridge.py --device`, and is not sent while
+those reports are missing for more than 3 s.
 
 Run the watch bridge whenever the panel is expected to reflect watch data, and the phone bridge
 whenever the phone app is in use. Without the watch bridge the receiver keeps running; after 5 s without watch messages it logs a
 warning and switches to the substitutes above, and it returns to the watch values once
 messages resume.
 
-**User profile.** With `--hqs` the receiver adds the current panel values, heart rate and mode
+**User profile.** With HQS the receiver adds the current panel values, heart rate and mode
 to a per-user profile once per second while `HL2DATA` is arriving, and writes it every 60 s and
-on exit. One JSON file holds one person (`--profile output/hqs/profiles/A.json`). An existing
-file is always loaded and extended; a missing file is created. The profile stores statistics,
+on exit. One JSON file holds one headset's user, `output/hqs/profiles/<clientIdentity>.json`. An
+existing file is always loaded and extended; a missing file is created. The profile stores statistics,
 not a log:
 
 - one entry per local calendar month, keeping the current month and the previous six;
@@ -307,11 +316,12 @@ to be the HoloLens; `main_phonebridge.py` takes that role and relays frames as `
 `HL2_TO_PHONE`. With `--device <clientIdentity>` it passes on only the `HL2_TO_PHONE` messages
 that headset sent. Point both apps' server IP at this PC; nothing else on them changes.
 Details in [modules/devicebridge/README.md](modules/devicebridge/README.md). The watch
-channels feed the HQS panel of entry point 4.
+channels and the phone touch summary feed the HQS panel of entry point 4, for the headset each
+bridge names with `--device`.
 
 ```bash
 python comm_hub.py --port 37001                    # terminal 1
-python main_watchbridge.py                         # terminal 2   (--no-raw-audio to publish VAD only)
+python main_watchbridge.py --device HoloLens2_B    # terminal 2   (--no-raw-audio to publish VAD only)
 python main_phonebridge.py --device HoloLens2_A    # terminal 3
 ```
 
